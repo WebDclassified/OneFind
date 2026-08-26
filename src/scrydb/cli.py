@@ -66,6 +66,27 @@ def cmd_eval(args: argparse.Namespace) -> int:
     return EXIT_OK
 
 
+def cmd_sweep_alpha(args: argparse.Namespace) -> int:
+    from .evaluate import run_alpha_sweep
+
+    alphas = (
+        [float(x) for x in args.alphas.split(",")]
+        if args.alphas
+        else [i / 10.0 for i in range(11)]
+    )
+    report = run_alpha_sweep(
+        args.dataset,
+        db=args.db,
+        alphas=alphas,
+        k=args.k,
+        model_name=args.model,
+        precision=args.precision,
+        out_dir=args.out,
+    )
+    print(f"done -> {report}")
+    return EXIT_OK
+
+
 def cmd_index(args: argparse.Namespace) -> int:
     from .ingest import ingest_path
     from .store import Index
@@ -125,6 +146,7 @@ def cmd_search(args: argparse.Namespace) -> int:
         hits = run_search(
             index, args.query, mode=args.mode, k=args.k,
             precision=args.precision, rrf_k=args.rrf_k, rerank=args.rerank,
+            fusion=args.fusion, alpha=args.alpha,
         )
     _print_hits(hits)
     return EXIT_OK
@@ -176,6 +198,14 @@ def build_parser() -> argparse.ArgumentParser:
         "--rerank", action="store_true",
         help="rescore hybrid candidates by full-precision cosine",
     )
+    p_search.add_argument(
+        "--fusion", choices=["rrf", "linear"], default="rrf",
+        help="hybrid fusion strategy (default rrf)",
+    )
+    p_search.add_argument(
+        "--alpha", type=float, default=0.5,
+        help="linear-fusion weight on semantic (0=lexical only, 1=semantic only)",
+    )
     p_search.add_argument("--k", type=int, default=10, help="number of results (1..50)")
     p_search.set_defaults(func=cmd_search)
 
@@ -192,6 +222,21 @@ def build_parser() -> argparse.ArgumentParser:
     p_eval.add_argument("--model", default=None, help="embedding model override")
     p_eval.add_argument("--out", default="benchmarks/reports")
     p_eval.set_defaults(func=cmd_eval)
+
+    p_sweep = sub.add_parser(
+        "sweep-alpha",
+        help="sweep alpha over linear hybrid fusion on an existing index",
+    )
+    p_sweep.add_argument("dataset", help="registry name (scifact, nfcorpus) or local folder")
+    p_sweep.add_argument("--db", required=True, help="path to an already-built index")
+    p_sweep.add_argument("--alphas", default=None, help="comma-separated alphas (default 0,0.1..1)")
+    p_sweep.add_argument("--k", type=int, default=10)
+    p_sweep.add_argument(
+        "--precision", choices=["float", "int8", "binary"], default="float"
+    )
+    p_sweep.add_argument("--model", default=None)
+    p_sweep.add_argument("--out", default="benchmarks/reports")
+    p_sweep.set_defaults(func=cmd_sweep_alpha)
 
     for name, hint in (("serve", "task T-11"),):
         p = sub.add_parser(name, help=f"(planned) see {hint}")

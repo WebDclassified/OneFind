@@ -130,7 +130,8 @@ def semantic_search(index, query: str, k: int = 10, precision: str = "float") ->
 
 def search(index, query: str, mode: str = "hybrid", k: int = 10,
            precision: str = "float", rrf_k: int = 60,
-           rerank: bool = False) -> list[Hit]:
+           rerank: bool = False, fusion: str = "rrf",
+           alpha: float = 0.5) -> list[Hit]:
     """Mode dispatcher (lexical | semantic | hybrid)."""
     if mode == "lexical":
         return lexical_search(index.conn, query, k=k)
@@ -138,7 +139,8 @@ def search(index, query: str, mode: str = "hybrid", k: int = 10,
         return semantic_search(index, query, k=k, precision=precision)
     if mode == "hybrid":
         return hybrid_search(index, query, k=k, precision=precision,
-                             rrf_k=rrf_k, rerank=rerank)
+                             rrf_k=rrf_k, rerank=rerank,
+                             fusion=fusion, alpha=alpha)
     raise UsageError(f"unknown mode '{mode}'")
 
 
@@ -158,8 +160,13 @@ def rrf_fuse(rankings: list[list[str]], k: int = 60) -> list[tuple[str, float]]:
 
 
 def hybrid_search(index, query: str, k: int = 10, precision: str = "float",
-                  rrf_k: int = 60, rerank: bool = False) -> list[Hit]:
-    """Fuse lexical BM25 with one semantic-precision ranking via RRF.
+                  rrf_k: int = 60, rerank: bool = False,
+                  fusion: str = "rrf", alpha: float = 0.5) -> list[Hit]:
+    """Fuse lexical BM25 with one semantic-precision ranking.
+
+    Fusion strategies (T-10 extension):
+    - 'rrf'    (default): Reciprocal Rank Fusion, k=60
+    - 'linear': blend min-max-normalized leg scores via alpha
 
     Each leg retrieves depth k; fused top-k is returned. With rerank=True
     the fused candidates (<=2k docs) are rescored by full-precision cosine
@@ -168,14 +175,21 @@ def hybrid_search(index, query: str, k: int = 10, precision: str = "float",
     q = query.strip()
     if not q:
         raise EmptyQueryError("query is empty")
+    if not 0.0 <= alpha <= 1.0:
+        raise UsageError("alpha must be in [0, 1]")
+    if fusion not in ("rrf", "linear"):
+        raise UsageError(f"unknown fusion '{fusion}' (rrf|linear)")
     _require_embedder(index)
 
     lex = lexical_search(index.conn, q, k=k)
     sem = semantic_search(index, q, k=k, precision=precision)
 
-    fused = rrf_fuse(
-        [[h.doc_id for h in lex], [h.doc_id for h in sem]], k=rrf_k
-    )[:k]
+    if fusion == "rrf":
+        fused = rrf_fuse(
+            [[h.doc_id for h in lex], [h.doc_id for h in sem]], k=rrf_k
+        )[:k]
+    else:  # linear
+        fused = linear_fuse(lex, sem, alpha)[:k]
 
     snippets = {h.doc_id: h.snippet for h in lex}
     titles: dict[str, str] = {}
@@ -187,6 +201,39 @@ def hybrid_search(index, query: str, k: int = 10, precision: str = "float",
         for doc_id, score in fused
     ]
     return _rerank_candidates(index, q, hits, k) if rerank else hits
+
+
+def linear_fuse(lex_hits: list[Hit], sem_hits: list[Hit],
+                alpha: float) -> list[tuple[str, float]]:
+    """Min-max-normalize each leg's scores to [0, 1] within the retrieved
+    pool, then blend: score = alpha * sem + (1 - alpha) * lex.
+
+    Deterministic tie-break by (-score, doc_id). At alpha=0 the ranking
+    equals the (tied) lexical ranking; at alpha=1 it equals the semantic
+    ranking.
+    """
+    import numpy as np
+
+    def _normalize(hits: list[Hit]) -> dict[str, float]:
+        if not hits:
+            return {}
+        scores = np.array([h.score for h in hits], dtype=float)
+        lo, hi = float(scores.min()), float(scores.max())
+        if hi - lo == 0.0:
+            return {h.doc_id: 1.0 for h in hits}
+        return {
+            h.doc_id: float((h.score - lo) / (hi - lo))
+            for h in hits
+        }
+
+    lex_norm = _normalize(lex_hits)
+    sem_norm = _normalize(sem_hits)
+    out = [
+        (d, alpha * sem_norm.get(d, 0.0) + (1.0 - alpha) * lex_norm.get(d, 0.0))
+        for d in (set(lex_norm) | set(sem_norm))
+    ]
+    out.sort(key=lambda kv: (-kv[1], kv[0]))
+    return out
 
 
 def _rerank_candidates(index, query: str, hits: list[Hit], k: int) -> list[Hit]:

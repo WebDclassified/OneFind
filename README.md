@@ -54,6 +54,29 @@ Reproduced on CPU with `all-MiniLM-L6-v2` (the paper uses an 8B-parameter embedd
 - **ADR-8** — RRF k=60, leg depth = requested k, rerank pool = fused candidates.
 - **Dataset scope** — SciFact + NFCorpus (5.2K + 3.6K docs). Touché (382K) and TREC-COVID (171K) excluded from the default scope; the harness supports them via registry.
 
+## Extension: weighted linear fusion vs RRF (T-10)
+
+Adds a second hybrid strategy to `hybrid_search` (CLI: `--fusion linear` + `--alpha`). The same legs are retrieved, each leg's scores are min-max-normalized to `[0, 1]`, then blended `α * semantic + (1-α) * lexical`. Full reports:
+[`benchmarks/reports/alpha-sweep-scifact-2026-08-26.md`](benchmarks/reports/alpha-sweep-scifact-2026-08-26.md),
+[`benchmarks/reports/alpha-sweep-nfcorpus-2026-08-26.md`](benchmarks/reports/alpha-sweep-nfcorpus-2026-08-26.md).
+
+| α | SciFact nDCG@10 | NFCorpus nDCG@10 |
+|---|---|---|
+| 0.0 (pure lexical) | 0.4396 | 0.2763 |
+| 0.1 – 0.5 plateau | **0.6572** | 0.3166 – 0.3217 |
+| 0.6 | 0.6548 | **0.3229** (best linear) |
+| 1.0 (pure semantic) | 0.6460 | 0.3170 |
+| **RRF baseline (default)** | **0.6568** | **0.3249** |
+
+**Conclusions.**
+- On **SciFact**, linear fusion with any `α ∈ [0.1, 0.5]` ties RRF to 4 decimal places — a flat plateau, suggesting the two legs mostly retrieve the same top set and blending does not hurt.
+- On **NFCorpus**, **RRF beats the best linear by 0.002** (0.3249 vs 0.3229). RRF's rank-position aggregation is more robust when the two legs have very different score distributions and a wider gap between the top document and the rest.
+- Either way, the differences are inside the noise of these single-run numbers; the practical choice is whichever is simpler to operate, and RRF stays the default per the paper.
+
+## Self review (T-09)
+
+`benchmarks/reports/review-t09.md` records what was checked, what changed, and what was intentionally left alone after a self-pass through the engine and the Phase 4 numbers.
+
 ## Status
 
 - [x] Step 1–2: Paper selected & analyzed (facts in `docs/02-technical-design.md`)
@@ -62,5 +85,5 @@ Reproduced on CPU with `all-MiniLM-L6-v2` (the paper uses an 8B-parameter embedd
 - [x] Phase 2: Semantic layer (sqlite-vec float storage + app-side int8/bit per ADR-7)
 - [x] Phase 3: Hybrid RRF + rerank (RRF k=60; ablation ≥5/10 curated wins)
 - [x] Phase 4: Reproduce BEIR results — SciFact & NFCorpus reports committed; qualitative paper claims confirmed
-- [ ] Phase 5: Review + extension experiment
+- [x] Phase 5: Review (`benchmarks/reports/review-t09.md`) + alpha-sweep extension on both datasets
 - [ ] Phase 6: Demo UI + publish

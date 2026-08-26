@@ -129,6 +129,128 @@ def run_eval(source: str, db: str | Path, k: int = 10,
     return report
 
 
+# ---- T-10: alpha sweep over linear fusion (vs RRF baseline) -----------------
+
+
+def run_alpha_sweep(source: str, db: str | Path, alphas: list[float] | None = None,
+                    k: int = 10, model_name: str = DEFAULT_MODEL,
+                    precision: str = "float",
+                    out_dir: str | Path = "benchmarks/reports") -> Path:
+    """Reuse an already-indexed database; sweep alpha in linear fusion.
+
+    Compares to the RRF hybrid baseline by re-evaluating once with the
+    existing hybrid(float) configuration.
+    """
+    try:
+        import ranx
+    except ImportError as exc:
+        raise UsageError('evaluation needs the [eval] extra - pip install -e ".[eval]"') from exc
+
+    model_name = model_name or DEFAULT_MODEL
+    alphas = list(alphas) if alphas is not None else [i / 10.0 for i in range(11)]
+    if not 0.0 <= min(alphas) <= 1.0 or not 0.0 <= max(alphas) <= 1.0:
+        raise UsageError("all alphas must be in [0, 1]")
+
+    folder = beir.load_local_or_registry(source)
+    queries_all = beir.load_queries(folder)
+    qrels_dict = beir.load_qrels(folder)
+    queries = {qid: t for qid, t in queries_all.items() if qid in qrels_dict}
+    if not queries:
+        raise DataError("no judged queries to evaluate")
+
+    rows: list[dict] = []
+    with Index.open(db) as index:
+        from .embed import SentenceEmbedder
+        print(f"loading embedding model: {model_name} ...")
+        index.attach_embedder(SentenceEmbedder(model_name))
+
+        for alpha in alphas:
+            per_query_run: dict[str, dict[str, float]] = {}
+            for qid, text in queries.items():
+                hits = run_search(
+                    index, text, mode="hybrid", k=k, precision=precision,
+                    fusion="linear", alpha=alpha,
+                )
+                per_query_run[qid] = {h.doc_id: float(h.score) for h in hits}
+            metrics = ranx.evaluate(
+                ranx.Qrels.from_dict(qrels_dict),
+                ranx.Run.from_dict(per_query_run),
+                METRICS,
+            )
+            rows.append({"alpha": alpha, "label": f"linear(α={alpha:.1f})",
+                         "metrics": metrics})
+            print(f"  linear(alpha={alpha:.1f}) nDCG@10={metrics['ndcg@10']:.4f}")
+
+        # RRF baseline computed against the same db
+        per_query_run = {
+            qid: {h.doc_id: float(h.score) for h in run_search(
+                index, text, mode="hybrid", k=k, precision=precision, fusion="rrf"
+            )}
+            for qid, text in queries.items()
+        }
+        rrf_metrics = ranx.evaluate(
+            ranx.Qrels.from_dict(qrels_dict),
+            ranx.Run.from_dict(per_query_run),
+            METRICS,
+        )
+        print(f"  RRF baseline         nDCG@10={rrf_metrics['ndcg@10']:.4f}")
+
+    out_path = Path(out_dir)
+    out_path.mkdir(parents=True, exist_ok=True)
+    report = out_path / f"alpha-sweep-{Path(source).name}-{datetime.date.today().isoformat()}.md"
+    _write_sweep(report, source=Path(source).name, model=model_name, precision=precision,
+                 k=k, num_queries=len(queries), rows=rows, rrf=rrf_metrics)
+    return report
+
+
+def _write_sweep(path: Path, **ctx) -> None:
+    rows = ctx["rows"]
+    rrf = ctx["rrf"]
+    best = max(rows, key=lambda r: r["metrics"]["ndcg@10"])
+    chart_lines = []
+    width = 40
+    for r in rows + [{"label": "RRF baseline", "metrics": rrf}]:
+        bar = "=" * max(1, int(round(r["metrics"]["ndcg@10"] * width)))
+        chart_lines.append(f"{r['label']:<18} | {bar:<{width}} {r['metrics']['ndcg@10']:.4f}")
+
+    lines = [
+        f"# Alpha sweep — {ctx['source']} ({ctx['precision']} precision)",
+        "",
+        f"- Date: {datetime.date.today().isoformat()}",
+        f"- Model: `{ctx['model']}` · judged queries: {ctx['num_queries']} · k: {ctx['k']}",
+        f"- Linear fusion min-max-normalizes each leg's scores to [0, 1] within the",
+        f"  retrieved k, then blends: alpha * semantic + (1 - alpha) * lexical.",
+        f"- RRF baseline = the existing `hybrid({ctx['precision']})` config.",
+        "",
+        "## nDCG@10 by alpha",
+        "",
+        "```",
+        *chart_lines,
+        "```",
+        "",
+        f"Best alpha: **{best['alpha']:.1f}** (nDCG@10 = {best['metrics']['ndcg@10']:.4f});",
+        f"RRF baseline nDCG@10 = {rrf['ndcg@10']:.4f}.",
+        "",
+        "## Full metrics",
+        "",
+        "| Configuration | nDCG@10 | AP | RR | P@10 |",
+        "|---|---|---|---|---|",
+    ]
+    for r in rows:
+        m = r["metrics"]
+        lines.append(
+            f"| {r['label']} | {m['ndcg@10']:.4f} | {m['map']:.4f} | "
+            f"{m['mrr']:.4f} | {m['precision@10']:.4f} |"
+        )
+    m = rrf
+    lines.append(
+        f"| RRF baseline | {m['ndcg@10']:.4f} | {m['map']:.4f} | "
+        f"{m['mrr']:.4f} | {m['precision@10']:.4f} |"
+    )
+    path.write_text("\n".join(lines) + "\n", encoding="utf-8")
+    print(f"report written: {path}")
+
+
 def _write_report(path: Path, **ctx) -> None:
     lines = [
         f"# Evaluation — {ctx['source']}",
