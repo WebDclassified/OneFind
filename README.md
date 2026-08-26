@@ -17,10 +17,10 @@ Reproduction of **[SQLite is Enough. Lexical, Semantic, and Hybrid Search with s
 ## Quickstart
 
 ```bash
-# Phase 0 — filled in when foundation lands
-pip install -e .
+pip install -e ".[model]"        # model extra optional until Phase 2
+scrydb check                      # prove FTS5 + sqlite-vec (+ add --full to load the model)
 scrydb index ./sample-data --db demo.db
-scrydb search "vitamin B12" --mode hybrid --db demo.db
+scrydb search "chlorophyll" --mode lexical --db demo.db   # hybrid arrives in Phase 3
 ```
 
 ## Results (vs paper)
@@ -31,7 +31,7 @@ _Filled by `benchmarks/run_eval.py` in Phase 4 — see `docs/06-engineering-plan
 
 - [x] Step 1–2: Paper selected & analyzed (facts in `docs/02-technical-design.md`)
 - [x] Phase 0: Foundation (`benchmarks/reports/env-2026-08-26.md`)
-- [ ] Phase 1: Lexical engine (FTS5/BM25)
+- [x] Phase 1: Lexical engine (FTS5/BM25) — ingest idempotent, ranked search live
 - [ ] Phase 2: Semantic layer (sqlite-vec, 3 precisions)
 - [ ] Phase 3: Hybrid RRF + rerank
 - [ ] Phase 4: Reproduce BEIR results

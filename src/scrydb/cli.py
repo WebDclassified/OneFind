@@ -12,6 +12,7 @@ import sys
 
 from . import __version__
 from .envcheck import collect_check
+from .errors import ScrydbError, UsageError
 
 EXIT_OK = 0
 EXIT_USAGE = 2
@@ -49,6 +50,45 @@ def cmd_check(args: argparse.Namespace) -> int:
     return EXIT_OK if report["ok"] else EXIT_ENV
 
 
+def cmd_index(args: argparse.Namespace) -> int:
+    from .ingest import ingest_path
+    from .store import Index
+
+    with Index.open(args.db) as index:
+        stats = ingest_path(index, args.path)
+    print(
+        f"indexed {stats['files_indexed']} files "
+        f"({stats['total_documents']} documents total) -> {args.db} "
+        "[lexical only; embeddings land in Phase 2]"
+    )
+    return EXIT_OK
+
+
+def _print_hits(hits, took_hint: str = "") -> None:
+    for rank, hit in enumerate(hits, start=1):
+        snippet_one_line = " ".join(hit.snippet.split())
+        print(f"{rank:>2}. [{hit.score:.4f}] {hit.doc_id} — {hit.title}")
+        print(f"    {snippet_one_line[:120]}")
+    if not hits:
+        print("no results")
+
+
+def cmd_search(args: argparse.Namespace) -> int:
+    from .search import lexical_search
+    from .store import Index
+
+    if args.mode != "lexical":
+        return _not_yet(f"mode '{args.mode}' arrives in Phase 2/3 (tasks T-04/T-06)")
+    if not 1 <= args.k <= 50:
+        raise UsageError("--k must be within 1..50")
+
+
+    with Index.open(args.db) as index:
+        hits = lexical_search(index.conn, args.query, k=args.k)
+    _print_hits(hits)
+    return EXIT_OK
+
+
 def _not_yet(phase_hint: str) -> int:
     print(f"not implemented yet - planned in docs/06-engineering-plan.md ({phase_hint})")
     return EXIT_USAGE
@@ -66,14 +106,23 @@ def build_parser() -> argparse.ArgumentParser:
     )
     p_check.set_defaults(func=cmd_check)
 
-    for name, hint in (
-        ("index", "task T-02"),
-        ("search", "tasks T-03/T-04/T-06"),
-        ("eval", "task T-07"),
-        ("serve", "task T-11"),
-    ):
+    p_index = sub.add_parser("index", help="index a folder of .txt/.md files into a database")
+    p_index.add_argument("path", help="corpus folder")
+    p_index.add_argument("--db", default="scrydb.db", help="target SQLite file (default scrydb.db)")
+    p_index.set_defaults(func=cmd_index)
+
+    p_search = sub.add_parser("search", help="query an index")
+    p_search.add_argument("query")
+    p_search.add_argument("--db", default="scrydb.db")
+    p_search.add_argument(
+        "--mode", choices=["lexical", "semantic", "hybrid"], default="hybrid"
+    )
+    p_search.add_argument("--k", type=int, default=10, help="number of results (1..50)")
+    p_search.set_defaults(func=cmd_search)
+
+    for name, hint in (("eval", "task T-07"), ("serve", "task T-11")):
         p = sub.add_parser(name, help=f"(planned) see {hint}")
-        p.set_defaults(func=lambda _args, hint=hint: _not_yet(hint))
+        p.set_defaults(func=lambda _a, hint=hint: _not_yet(hint))
 
     return parser
 
@@ -81,7 +130,11 @@ def build_parser() -> argparse.ArgumentParser:
 def main(argv: list[str] | None = None) -> int:
     parser = build_parser()
     args = parser.parse_args(argv)
-    return args.func(args)
+    try:
+        return args.func(args)
+    except ScrydbError as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        return exc.exit_code
 
 
 if __name__ == "__main__":
