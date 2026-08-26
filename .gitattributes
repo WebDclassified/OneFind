@@ -1,0 +1,4 @@
+# normalize line endings (repo LF, working tree native)
+* text=auto eol=lf
+*.png binary
+*.db binary

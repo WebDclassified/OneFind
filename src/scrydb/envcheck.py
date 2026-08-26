@@ -91,7 +91,11 @@ def model_status(load_model: bool, model_name: str = DEFAULT_MODEL) -> dict:
 
         model = SentenceTransformer(model_name)
         info["status"] = "loaded"
-        info["dimension"] = model.get_sentence_embedding_dimension()
+        # newer sentence-transformers renamed this accessor
+        get_dim = getattr(model, "get_embedding_dimension", None)
+        info["dimension"] = (
+            get_dim() if get_dim is not None else model.get_sentence_embedding_dimension()
+        )
     except Exception as exc:  # noqa: BLE001
         info["status"] = "error"
         info["error"] = str(exc)[:300]

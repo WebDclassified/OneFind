@@ -30,7 +30,7 @@ _Filled by `benchmarks/run_eval.py` in Phase 4 — see `docs/06-engineering-plan
 ## Status
 
 - [x] Step 1–2: Paper selected & analyzed (facts in `docs/02-technical-design.md`)
-- [ ] Phase 0: Foundation
+- [x] Phase 0: Foundation (`benchmarks/reports/env-2026-08-26.md`)
 - [ ] Phase 1: Lexical engine (FTS5/BM25)
 - [ ] Phase 2: Semantic layer (sqlite-vec, 3 precisions)
 - [ ] Phase 3: Hybrid RRF + rerank
