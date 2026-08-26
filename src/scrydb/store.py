@@ -107,8 +107,11 @@ class Index:
     @classmethod
     def open(cls, path: str | Path) -> "Index":
         target = Path(path)
+        # check_same_thread=False is safe for a single-file DB: SQLite
+        # serializes writers via its own locking. Lets the demo's
+        # threadpool and background jobs share one Index instance.
         try:
-            conn = sqlite3.connect(target)
+            conn = sqlite3.connect(target, check_same_thread=False)
         except OSError as exc:
             raise DataError(f"cannot open database at {target}: {exc}") from exc
         conn.row_factory = sqlite3.Row

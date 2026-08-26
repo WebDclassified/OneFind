@@ -49,16 +49,17 @@ def test_cli_check_exit_zero_with_json_output(capsys):
 
 
 def test_planned_subcommands_are_explicit_stubs():
-    # serve is still a planned phase - it must say so and exit 2.
-    # eval went live in Phase 4 and is covered by tests/test_eval.py
-    assert main(["serve"]) == EXIT_USAGE
+    # no subcommands remain as stubs after Phase 6; this test stays as a
+    # placeholder so future planned commands (delete/delete-doc?) can be
+    # added back here when the project grows.
+    pass
 
 
 def test_real_subcommands_require_their_arguments():
-    # index/search/eval take arguments; missing args -> argparse exit 2
+    # every subcommand takes arguments; missing args -> argparse exit 2
     import pytest
 
-    for argv in (["index"], ["search"], ["eval"]):
+    for argv in (["index"], ["search"], ["eval"], ["sweep-alpha"], ["serve"]):
         with pytest.raises(SystemExit) as excinfo:
             main(argv)
         assert excinfo.value.code == EXIT_USAGE

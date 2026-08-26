@@ -152,6 +152,17 @@ def cmd_search(args: argparse.Namespace) -> int:
     return EXIT_OK
 
 
+def cmd_serve(args: argparse.Namespace) -> int:
+    import uvicorn
+
+    from .serve import create_app
+
+    app = create_app(args.db, reset_token=args.reset_token)
+    print(f"scrydb serving on http://{args.host}:{args.port} (db: {args.db})")
+    uvicorn.run(app, host=args.host, port=args.port, log_level=args.log_level)
+    return EXIT_OK
+
+
 def _not_yet(phase_hint: str) -> int:
     print(f"not implemented yet - planned in docs/06-engineering-plan.md ({phase_hint})")
     return EXIT_USAGE
@@ -238,9 +249,14 @@ def build_parser() -> argparse.ArgumentParser:
     p_sweep.add_argument("--out", default="benchmarks/reports")
     p_sweep.set_defaults(func=cmd_sweep_alpha)
 
-    for name, hint in (("serve", "task T-11"),):
-        p = sub.add_parser(name, help=f"(planned) see {hint}")
-        p.set_defaults(func=lambda _a, hint=hint: _not_yet(hint))
+    p_serve = sub.add_parser("serve", help="run the local demo web app (T-11)")
+    p_serve.add_argument("--db", required=True, help="SQLite index file to serve")
+    p_serve.add_argument("--host", default="127.0.0.1")
+    p_serve.add_argument("--port", type=int, default=8080)
+    p_serve.add_argument("--reset-token", default=None, dest="reset_token",
+                         help="token required to POST /api/reset (random if omitted)")
+    p_serve.add_argument("--log-level", default="warning", dest="log_level")
+    p_serve.set_defaults(func=cmd_serve)
 
     return parser
 
