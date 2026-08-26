@@ -1,0 +1,17 @@
+# environments & caches
+.venv/
+venv/
+__pycache__/
+*.pyc
+.pytest_cache/
+*.egg-info/
+build/
+dist/
+
+# generated data (models cache under user dir; corpora re-downloadable)
+*.db
+data/
+
+# OS noise
+Thumbs.db
+.DS_Store
