@@ -1,11 +1,13 @@
 # 02 · Technical Design Document
 
-Project: scrydb reproduction · Version: v0.3 (draft) · Status: Proposed
+Project: scrydb reproduction · Version: v0.4 (draft) · Status: Proposed
 
 > v0.2 change: added ADR-7 — application-side int8/binary quantization after an
 > empirical finding about the installed sqlite-vec build.
 > v0.3 change: added ADR-8 — hybrid RRF defaults (fusion constant, leg depth,
 > rerank pool).
+> v0.4 change: added ADR-9 — BEIR acquisition via HuggingFace parquet + qrels
+> sibling repos; pyarrow joins via the [eval] extra.
 
 ## System context
 
@@ -79,6 +81,14 @@ Choice: RRF k=60 (Cormack et al. 2009 default), each leg retrieves depth k (the 
 Reason: standard, deterministic, and matches the paper's "optionally reranked using more costly approaches" second stage.
 Consequences: a deeper leg depth might raise recall at higher latency; kept simple for V1.
 Revisit when: Phase 4 evaluation shows recall@10 deficits vs paper direction — then sweep leg depth as part of T-10 extension option 1.
+
+**ADR-9: BEIR datasets acquired from HuggingFace-hosted copies.**
+Status: Accepted
+Context: original BEIR hosting has shifted over the years; PRD risk R1 anticipated download flakiness.
+Finding: `BeIR/<name>` on the HF Hub serves corpus/queries as parquet under `corpus/` and `queries/` folders, with qrels in sibling repos `BeIR/<name>-qrels` as raw TSV.
+Choice: download-and-cache those files under `data/` (gitignored); read parquet via `pyarrow`, exposed through a new `[eval]` extra alongside `ranx`.
+Consequences: one extra dependency in the eval path only; registry names (`scifact`, `nfcorpus`) plus a local-folder mode keep tests fully offline-capable.
+Revisit when: HF layout changes again — loaders accept both jsonl and parquet to soften future moves.
 
 ## Performance budget & observability
 

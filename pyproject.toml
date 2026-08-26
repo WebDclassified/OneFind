@@ -16,6 +16,7 @@ dependencies = [
 
 [project.optional-dependencies]
 model = ["sentence-transformers>=3.0"]
+eval = ["ranx>=0.3", "pyarrow>=14"]
 dev = ["pytest>=8"]
 
 [project.scripts]

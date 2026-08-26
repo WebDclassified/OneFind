@@ -100,6 +100,7 @@ class Index:
         self.path = Path(path)
         self.vec_ready = _try_load_vec(conn)
         self.embedder: "SentenceEmbedder | None" = None
+        self._vector_cache: tuple["object", list[int]] | None = None
 
     # -- lifecycle ---------------------------------------------------------
 
@@ -235,6 +236,7 @@ class Index:
             if self.embedder is not None and chunk_rows:
                 self._sync_vectors(chunk_rows)
 
+            self._vector_cache = None  # invalidate; next read reloads
             self.conn.commit()
 
         for doc in docs:
@@ -270,10 +272,13 @@ class Index:
     def get_all_vectors(self) -> tuple["object", list[int]]:
         """All stored embeddings as (<ndarray float32 [n, dim]>, row_ids).
 
-        Loaded fresh per call; fine at reproduction corpus sizes (a 5K-doc
-        BEIR subset is ~7 MB). Caching arrives with the eval harness.
+        Loaded once per Index instance (invalidated by writes); callers
+        must treat the returned array as READ-ONLY.
         """
         import numpy as np
+
+        if self._vector_cache is not None:
+            return self._vector_cache
 
         dim_raw = self.get_meta("model_dim")
         dim = int(dim_raw) if dim_raw else 0
@@ -282,10 +287,13 @@ class Index:
         ).fetchall()
         row_ids = [int(r[0]) for r in rows]
         if not rows or not dim:
-            return np.empty((0, dim or 0), dtype=np.float32), row_ids
-        blob = b"".join(r[1] for r in rows)
-        matrix = np.frombuffer(blob, dtype="<f4").reshape(len(rows), dim)
-        return matrix.copy(), row_ids
+            result = (np.empty((0, dim or 0), dtype=np.float32), row_ids)
+        else:
+            blob = b"".join(r[1] for r in rows)
+            matrix = np.frombuffer(blob, dtype="<f4").reshape(len(rows), dim)
+            result = (matrix.copy(), row_ids)
+        self._vector_cache = result
+        return result
 
     def vectors_for_docs(self, doc_ids: list[str]) -> dict:
         """doc_id -> float32 ndarray, for reranking a candidate pool."""

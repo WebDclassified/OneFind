@@ -50,6 +50,22 @@ def cmd_check(args: argparse.Namespace) -> int:
     return EXIT_OK if report["ok"] else EXIT_ENV
 
 
+def cmd_eval(args: argparse.Namespace) -> int:
+    from .evaluate import run_eval
+
+    report = run_eval(
+        args.dataset,
+        db=args.db,
+        k=args.k,
+        max_docs=args.max_docs,
+        limit_queries=args.limit_queries,
+        model_name=args.model,
+        out_dir=args.out,
+    )
+    print(f"done -> {report}")
+    return EXIT_OK
+
+
 def cmd_index(args: argparse.Namespace) -> int:
     from .ingest import ingest_path
     from .store import Index
@@ -163,7 +179,21 @@ def build_parser() -> argparse.ArgumentParser:
     p_search.add_argument("--k", type=int, default=10, help="number of results (1..50)")
     p_search.set_defaults(func=cmd_search)
 
-    for name, hint in (("eval", "task T-07"), ("serve", "task T-11")):
+    p_eval = sub.add_parser("eval", help="run all retrieval configurations on a BEIR dataset")
+    p_eval.add_argument(
+        "dataset",
+        help="registry name (scifact, nfcorpus) or a local folder with "
+             "corpus/queries/qrels files",
+    )
+    p_eval.add_argument("--db", default=None, help="index file (default data/<name>.db)")
+    p_eval.add_argument("--k", type=int, default=10)
+    p_eval.add_argument("--max-docs", type=int, default=None, dest="max_docs")
+    p_eval.add_argument("--limit-queries", type=int, default=None, dest="limit_queries")
+    p_eval.add_argument("--model", default=None, help="embedding model override")
+    p_eval.add_argument("--out", default="benchmarks/reports")
+    p_eval.set_defaults(func=cmd_eval)
+
+    for name, hint in (("serve", "task T-11"),):
         p = sub.add_parser(name, help=f"(planned) see {hint}")
         p.set_defaults(func=lambda _a, hint=hint: _not_yet(hint))
 
