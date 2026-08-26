@@ -1,6 +1,6 @@
-# OneFind — Reproducing "SQLite is Enough"
+# OneFind — Single-File Hybrid Information Retrieval
 
-Reproduction of **[SQLite is Enough. Lexical, Semantic, and Hybrid Search with OneFind](https://arxiv.org/abs/2608.24060)** (arXiv:2608.24060, cs.IR) — a lightweight hybrid search engine built entirely on SQLite: FTS5 (BM25) + sqlite-vec (embeddings) + Reciprocal Rank Fusion.
+**OneFind** is a hybrid information-retrieval system that combines lexical search (BM25 via SQLite FTS5), semantic search (via `sqlite-vec`), and Reciprocal Rank Fusion into a single library, CLI, and localhost web demo. It is a from-scratch reimplementation and independent extension of the architecture proposed in **[SQLite is Enough: Lexical, Semantic, and Hybrid Search with scrydb](https://arxiv.org/abs/2608.24060)** (arXiv:2608.24060, cs.IR).
 
 > **Major-project final report**: see [`FORMAL_PROJECT_REPORT.md`](FORMAL_PROJECT_REPORT.md) for the academic-style write-up (Executive Summary → Related Work → Design → Results → Discussion → Conclusion → Future Work → Appendices).
 >
@@ -12,8 +12,8 @@ Reproduction of **[SQLite is Enough. Lexical, Semantic, and Hybrid Search with O
 ## Quickstart (clone → demo in ~5 minutes)
 
 ```bash
-git clone <this repo> OneFind
-cd OneFind
+git clone <this repo> onefind
+cd onefind
 python -m venv .venv
 .venv\Scripts\activate                      # Windows
 # source .venv/bin/activate                  # Linux/macOS
@@ -45,7 +45,7 @@ pytest
 | `TEAM_PREPARATION.md` | **Full project briefing for the 3 teammates** — story, architecture, demo, Q&A |
 | `REPORT.md` | Earlier, shorter academic-style report |
 | `docs/01-prd.md` … `docs/07-references.md` | Six-document spec system (source of truth, versioned with code) |
-| `src/OneFind/` | The library + CLI + FastAPI demo |
+| `src/onefind/` | The OneFind library + CLI + FastAPI demo |
 | `tests/` | pytest suite — 67 tests, model- and serve-extras gated |
 | `benchmarks/reports/` | Generated evaluation reports + review notes |
 | `demo/index.html` | Single-page demo UI (vanilla JS, no build step) |
