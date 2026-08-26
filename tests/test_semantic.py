@@ -82,11 +82,13 @@ def test_lexical_only_index_rejects_semantic(tmp_path):
             search(idx, "anything", mode="semantic")
 
 
-def test_mode_dispatcher_still_guards_hybrid(embedded_db, embedder):
+def test_mode_dispatcher_routes_hybrid_since_phase_3(embedded_db, embedder):
+    # hybrid was a guarded stub through Phase 2; it must work end-to-end now
     with Index.open(embedded_db) as idx:
         idx.attach_embedder(embedder)
-        with pytest.raises(UsageError):
-            search(idx, "q", mode="hybrid")
+        hits = search(idx, "vitamin", mode="hybrid", k=3)
+    assert len(hits) == 3
+    assert all(h.score > 0 for h in hits)
 
 
 def test_determinism_across_runs(embedded_db, embedder):

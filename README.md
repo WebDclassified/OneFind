@@ -33,7 +33,7 @@ _Filled by `benchmarks/run_eval.py` in Phase 4 — see `docs/06-engineering-plan
 - [x] Phase 0: Foundation (`benchmarks/reports/env-2026-08-26.md`)
 - [x] Phase 1: Lexical engine (FTS5/BM25) — ingest idempotent, ranked search live
 - [x] Phase 2: Semantic layer (sqlite-vec float storage + app-side int8/bit per ADR-7)
-- [ ] Phase 3: Hybrid RRF + rerank
+- [x] Phase 3: Hybrid RRF + rerank (RRF k=60; ablation ≥5/10 curated wins)
 - [ ] Phase 4: Reproduce BEIR results
 - [ ] Phase 5: Review + extension experiment
 - [ ] Phase 6: Demo UI + publish

@@ -129,11 +129,82 @@ def semantic_search(index, query: str, k: int = 10, precision: str = "float") ->
 
 
 def search(index, query: str, mode: str = "hybrid", k: int = 10,
-           precision: str = "float") -> list[Hit]:
-    """Mode dispatcher. Hybrid lands in Phase 3 (task T-06)."""
+           precision: str = "float", rrf_k: int = 60,
+           rerank: bool = False) -> list[Hit]:
+    """Mode dispatcher (lexical | semantic | hybrid)."""
     if mode == "lexical":
         return lexical_search(index.conn, query, k=k)
     if mode == "semantic":
         return semantic_search(index, query, k=k, precision=precision)
-    raise UsageError("mode 'hybrid' arrives in Phase 3 (task T-06)")
+    if mode == "hybrid":
+        return hybrid_search(index, query, k=k, precision=precision,
+                             rrf_k=rrf_k, rerank=rerank)
+    raise UsageError(f"unknown mode '{mode}'")
+
+
+# ---- hybrid RRF fusion (Phase 3) ---------------------------------------------
+
+def rrf_fuse(rankings: list[list[str]], k: int = 60) -> list[tuple[str, float]]:
+    """Reciprocal Rank Fusion (Cormock et al. 2009; the paper's ref [7]).
+
+    score(d) = sum over rankings of 1 / (k + rank), rank starting at 1.
+    Deterministic ordering: descending score, then ascending doc_id.
+    """
+    scores: dict[str, float] = {}
+    for ranking in rankings:
+        for rank, doc_id in enumerate(ranking, start=1):
+            scores[doc_id] = scores.get(doc_id, 0.0) + 1.0 / (k + rank)
+    return sorted(scores.items(), key=lambda kv: (-kv[1], kv[0]))
+
+
+def hybrid_search(index, query: str, k: int = 10, precision: str = "float",
+                  rrf_k: int = 60, rerank: bool = False) -> list[Hit]:
+    """Fuse lexical BM25 with one semantic-precision ranking via RRF.
+
+    Each leg retrieves depth k; fused top-k is returned. With rerank=True
+    the fused candidates (<=2k docs) are rescored by full-precision cosine
+    against the stored vectors - the paper's optional costly second stage.
+    """
+    q = query.strip()
+    if not q:
+        raise EmptyQueryError("query is empty")
+    _require_embedder(index)
+
+    lex = lexical_search(index.conn, q, k=k)
+    sem = semantic_search(index, q, k=k, precision=precision)
+
+    fused = rrf_fuse(
+        [[h.doc_id for h in lex], [h.doc_id for h in sem]], k=rrf_k
+    )[:k]
+
+    snippets = {h.doc_id: h.snippet for h in lex}
+    titles: dict[str, str] = {}
+    for hit in (*lex, *sem):
+        titles.setdefault(hit.doc_id, hit.title)
+
+    hits = [
+        Hit(doc_id, titles.get(doc_id, ""), score, snippets.get(doc_id, ""))
+        for doc_id, score in fused
+    ]
+    return _rerank_candidates(index, q, hits, k) if rerank else hits
+
+
+def _rerank_candidates(index, query: str, hits: list[Hit], k: int) -> list[Hit]:
+    """Rescore fused candidates by true cosine; never returns fewer than
+    min(k, len(hits)) results."""
+    import numpy as np
+
+    if not hits:
+        return hits
+    vectors = index.vectors_for_docs([h.doc_id for h in hits])
+    if not vectors:
+        return hits[:k]
+    qvec = index.embedder.encode_query(query)
+    rescored = []
+    for hit in hits:
+        vec = vectors.get(hit.doc_id)
+        similarity = float(np.dot(vec, qvec)) if vec is not None else -2.0
+        rescored.append((similarity, hit))
+    rescored.sort(key=lambda pair: (-pair[0], pair[1].doc_id))
+    return [hit for _sim, hit in rescored][:k]
 

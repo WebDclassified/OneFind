@@ -1,9 +1,11 @@
 # 02 · Technical Design Document
 
-Project: scrydb reproduction · Version: v0.2 (draft) · Status: Proposed
+Project: scrydb reproduction · Version: v0.3 (draft) · Status: Proposed
 
 > v0.2 change: added ADR-7 — application-side int8/binary quantization after an
 > empirical finding about the installed sqlite-vec build.
+> v0.3 change: added ADR-8 — hybrid RRF defaults (fusion constant, leg depth,
+> rerank pool).
 
 ## System context
 
@@ -69,6 +71,14 @@ Choice: (b).
 Reason: metrically identical to the paper's configurations, fully deterministic, zero fragile pins, and honest at our corpus sizes (~ms brute force in numpy). The limitation is itself a reproducible result worth reporting.
 Consequences: the paper's *latency* claims for quantized search are not reproduced natively (our eval measures our real latencies instead); storage keeps one copy of vectors, not three.
 Revisit when: a sqlite-vec release accepts quantized inputs — then `semantic_search` flips back behind the same function signature and T-10 can benchmark both paths.
+
+**ADR-8: hybrid fusion parameters.**
+Status: Accepted
+Context: the paper fuses lexical + semantic rankings via RRF but our extraction does not state its fusion constant or retrieval depth.
+Choice: RRF k=60 (Cormack et al. 2009 default), each leg retrieves depth k (the requested result count), fused top-k returned; `--rerank` rescores the fused candidate pool (≤2k docs) by full-precision cosine against stored vectors.
+Reason: standard, deterministic, and matches the paper's "optionally reranked using more costly approaches" second stage.
+Consequences: a deeper leg depth might raise recall at higher latency; kept simple for V1.
+Revisit when: Phase 4 evaluation shows recall@10 deficits vs paper direction — then sweep leg depth as part of T-10 extension option 1.
 
 ## Performance budget & observability
 

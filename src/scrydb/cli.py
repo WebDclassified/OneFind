@@ -96,7 +96,7 @@ def cmd_search(args: argparse.Namespace) -> int:
         raise UsageError("--k must be within 1..50")
 
     with Index.open(args.db) as index:
-        if args.mode == "semantic":
+        if args.mode in ("semantic", "hybrid"):
             model_name = index.get_meta("model_name")
             if model_name is None:
                 raise UsageError(
@@ -107,7 +107,8 @@ def cmd_search(args: argparse.Namespace) -> int:
 
             index.attach_embedder(SentenceEmbedder(model_name))
         hits = run_search(
-            index, args.query, mode=args.mode, k=args.k, precision=args.precision
+            index, args.query, mode=args.mode, k=args.k,
+            precision=args.precision, rrf_k=args.rrf_k, rerank=args.rerank,
         )
     _print_hits(hits)
     return EXIT_OK
@@ -150,6 +151,14 @@ def build_parser() -> argparse.ArgumentParser:
     p_search.add_argument(
         "--precision", choices=["float", "int8", "binary"], default="float",
         help="vector storage precision for semantic/hybrid search",
+    )
+    p_search.add_argument(
+        "--rrf-k", type=int, default=60, dest="rrf_k",
+        help="Reciprocal Rank Fusion constant (default 60)",
+    )
+    p_search.add_argument(
+        "--rerank", action="store_true",
+        help="rescore hybrid candidates by full-precision cosine",
     )
     p_search.add_argument("--k", type=int, default=10, help="number of results (1..50)")
     p_search.set_defaults(func=cmd_search)

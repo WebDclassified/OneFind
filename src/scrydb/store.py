@@ -287,6 +287,25 @@ class Index:
         matrix = np.frombuffer(blob, dtype="<f4").reshape(len(rows), dim)
         return matrix.copy(), row_ids
 
+    def vectors_for_docs(self, doc_ids: list[str]) -> dict:
+        """doc_id -> float32 ndarray, for reranking a candidate pool."""
+        import numpy as np
+
+        unique = list(dict.fromkeys(doc_ids))
+        if not unique:
+            return {}
+        placeholders = ",".join("?" * len(unique))
+        rows = self.conn.execute(
+            f"""
+            SELECT c.doc_id, v.embedding
+            FROM vec_float v
+            JOIN chunks c ON c.row_id = v.rowid
+            WHERE c.doc_id IN ({placeholders})
+            """,  # noqa: S608 - placeholders only, no user data in SQL text
+            unique,
+        ).fetchall()
+        return {doc_id: np.frombuffer(blob, dtype="<f4").copy() for doc_id, blob in rows}
+
     # -- reads ---------------------------------------------------------------
 
     def count(self, what: str) -> int:
