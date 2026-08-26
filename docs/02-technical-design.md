@@ -1,6 +1,9 @@
 # 02 · Technical Design Document
 
-Project: scrydb reproduction · Version: v0.1 (draft) · Status: Proposed
+Project: scrydb reproduction · Version: v0.2 (draft) · Status: Proposed
+
+> v0.2 change: added ADR-7 — application-side int8/binary quantization after an
+> empirical finding about the installed sqlite-vec build.
 
 ## System context
 
@@ -56,6 +59,16 @@ BEIR protocol scores whole documents; upstream example indexes docs directly. Ch
 
 **ADR-5: metrics library = `ranx`.**
 Options: pytrec_eval (C ext) / ranx (pure Python). Choice: ranx. Consequence: trivial install on Windows; if a metric mismatches expectations we cross-check one table with pytrec_eval once.
+
+**ADR-7: int8/binary search modes computed application-side over float32 storage (Phase 2).**
+Status: Accepted
+Context: the paper evaluates semantic retrieval at three storage precisions (float cosine, int8 cosine, binary Hamming) attributed to sqlite-vec capabilities.
+Finding: the installed wheel (`sqlite_vec` v0.1.9) declares `int8[n]` / `bit[n]` columns but **rejects every input path for them** — raw BLOB, `serialize_int8`, JSON array, even float-BLOB — for both INSERT and MATCH query vectors ("expected to be of type int8/bit, but a float32 vector was provided"). Only float32 works end-to-end.
+Options: (a) hunt for a newer/dev sqlite-vec build and pin it; (b) keep one native `vec_float` table and compute int8-cosine and sign-bit-Hamming in numpy over the stored vectors inside the library API.
+Choice: (b).
+Reason: metrically identical to the paper's configurations, fully deterministic, zero fragile pins, and honest at our corpus sizes (~ms brute force in numpy). The limitation is itself a reproducible result worth reporting.
+Consequences: the paper's *latency* claims for quantized search are not reproduced natively (our eval measures our real latencies instead); storage keeps one copy of vectors, not three.
+Revisit when: a sqlite-vec release accepts quantized inputs — then `semantic_search` flips back behind the same function signature and T-10 can benchmark both paths.
 
 ## Performance budget & observability
 

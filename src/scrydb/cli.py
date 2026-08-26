@@ -55,36 +55,60 @@ def cmd_index(args: argparse.Namespace) -> int:
     from .store import Index
 
     with Index.open(args.db) as index:
+        if args.embed:
+            from .embed import DEFAULT_MODEL, SentenceEmbedder
+
+            model_name = args.model or index.get_meta("model_name") or DEFAULT_MODEL
+            print(f"loading embedding model: {model_name} ...")
+            index.attach_embedder(SentenceEmbedder(model_name))
         stats = ingest_path(index, args.path)
+        n_vectors = index.count("vectors") if args.embed else None
+        bound_model = index.get_meta("model_name") if args.embed else None
+
+    vectors = f", {n_vectors} vectors" if n_vectors is not None else ""
+    extra = (
+        f" [model: {bound_model}; float storage, app-side int8/bit]"
+        if bound_model
+        else " [lexical only - add --embed for semantic search]"
+    )
     print(
         f"indexed {stats['files_indexed']} files "
-        f"({stats['total_documents']} documents total) -> {args.db} "
-        "[lexical only; embeddings land in Phase 2]"
+        f"({stats['total_documents']} documents total{vectors}) -> {args.db}{extra}"
     )
     return EXIT_OK
 
 
-def _print_hits(hits, took_hint: str = "") -> None:
+def _print_hits(hits) -> None:
     for rank, hit in enumerate(hits, start=1):
-        snippet_one_line = " ".join(hit.snippet.split())
-        print(f"{rank:>2}. [{hit.score:.4f}] {hit.doc_id} — {hit.title}")
-        print(f"    {snippet_one_line[:120]}")
+        snippet_one_line = " ".join(hit.snippet.split()) if hit.snippet else ""
+        print(f"{rank:>2}. [{hit.score:.4f}] {hit.doc_id} - {hit.title}")
+        if snippet_one_line:
+            print(f"    {snippet_one_line[:120]}")
     if not hits:
         print("no results")
 
 
 def cmd_search(args: argparse.Namespace) -> int:
-    from .search import lexical_search
+    from .search import search as run_search
     from .store import Index
 
-    if args.mode != "lexical":
-        return _not_yet(f"mode '{args.mode}' arrives in Phase 2/3 (tasks T-04/T-06)")
     if not 1 <= args.k <= 50:
         raise UsageError("--k must be within 1..50")
 
-
     with Index.open(args.db) as index:
-        hits = lexical_search(index.conn, args.query, k=args.k)
+        if args.mode == "semantic":
+            model_name = index.get_meta("model_name")
+            if model_name is None:
+                raise UsageError(
+                    "this index has no embeddings; rebuild with 'scrydb index --embed'"
+                )
+            print(f"loading embedding model: {model_name} ...")
+            from .embed import SentenceEmbedder
+
+            index.attach_embedder(SentenceEmbedder(model_name))
+        hits = run_search(
+            index, args.query, mode=args.mode, k=args.k, precision=args.precision
+        )
     _print_hits(hits)
     return EXIT_OK
 
@@ -109,6 +133,12 @@ def build_parser() -> argparse.ArgumentParser:
     p_index = sub.add_parser("index", help="index a folder of .txt/.md files into a database")
     p_index.add_argument("path", help="corpus folder")
     p_index.add_argument("--db", default="scrydb.db", help="target SQLite file (default scrydb.db)")
+    p_index.add_argument(
+        "--embed",
+        action="store_true",
+        help="also compute embeddings (float+int8+bit vectors; needs [model] extra)",
+    )
+    p_index.add_argument("--model", default=None, help="embedding model name (default MiniLM)")
     p_index.set_defaults(func=cmd_index)
 
     p_search = sub.add_parser("search", help="query an index")
@@ -116,6 +146,10 @@ def build_parser() -> argparse.ArgumentParser:
     p_search.add_argument("--db", default="scrydb.db")
     p_search.add_argument(
         "--mode", choices=["lexical", "semantic", "hybrid"], default="hybrid"
+    )
+    p_search.add_argument(
+        "--precision", choices=["float", "int8", "binary"], default="float",
+        help="vector storage precision for semantic/hybrid search",
     )
     p_search.add_argument("--k", type=int, default=10, help="number of results (1..50)")
     p_search.set_defaults(func=cmd_search)
