@@ -2,7 +2,28 @@
 
 Reproduction of **[SQLite is Enough. Lexical, Semantic, and Hybrid Search with scrydb](https://arxiv.org/abs/2608.24060)** (arXiv:2608.24060, cs.IR) — a lightweight hybrid search engine built entirely on SQLite: FTS5 (BM25) + sqlite-vec (embeddings) + Reciprocal Rank Fusion.
 
-> Portfolio project: read literature → implement from scratch → reproduce reported behavior → extend → publish.
+> **Major-project final report**: see [`REPORT.md`](REPORT.md) for the academic-style write-up (Abstract → Related Work → Design → Results → Discussion → Future Work → Appendices).
+>
+> **Portfolio project**: read literature → implement from scratch → reproduce reported behavior → extend → publish.
+
+## Abstract (excerpt)
+
+We reimplement the scrydb pipeline from the paper, evaluate every
+configuration on two BEIR datasets (SciFact, NFCorpus) using standard
+IR metrics, and conduct one extension experiment (weighted linear
+fusion vs RRF across `α ∈ [0, 1]`). Our MiniLM-L6-v2 (CPU) results
+reproduce the paper's *qualitative* findings — hybrid search beats
+the best single mode, int8 quantization loses essentially nothing
+vs float, binary quantization degrades by ~10% and still dominates
+lexical — while absolute nDCG@10 sits below the paper's 8B-parameter
+baseline as expected from the deliberate model downscaling. We also
+document a substantive finding: the shipped `sqlite-vec` 0.1.9 wheel
+declares `int8[n]` and `bit[n]` vector columns but rejects all
+int8/bit inputs — we recover the paper's int8/binary configurations
+via application-side quantization over the stored float vectors. The
+implementation is packaged as a pip-installable library with a CLI,
+a FastAPI-based localhost demo, a 67-test pytest suite, and four
+published evaluation reports.
 
 ## Quickstart (clone → demo in ~5 minutes)
 
