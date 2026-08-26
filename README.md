@@ -1,6 +1,6 @@
-# scrydb — Reproducing "SQLite is Enough"
+# OneFind — Reproducing "SQLite is Enough"
 
-Reproduction of **[SQLite is Enough. Lexical, Semantic, and Hybrid Search with scrydb](https://arxiv.org/abs/2608.24060)** (arXiv:2608.24060, cs.IR) — a lightweight hybrid search engine built entirely on SQLite: FTS5 (BM25) + sqlite-vec (embeddings) + Reciprocal Rank Fusion.
+Reproduction of **[SQLite is Enough. Lexical, Semantic, and Hybrid Search with OneFind](https://arxiv.org/abs/2608.24060)** (arXiv:2608.24060, cs.IR) — a lightweight hybrid search engine built entirely on SQLite: FTS5 (BM25) + sqlite-vec (embeddings) + Reciprocal Rank Fusion.
 
 > **Major-project final report**: see [`FORMAL_PROJECT_REPORT.md`](FORMAL_PROJECT_REPORT.md) for the academic-style write-up (Executive Summary → Related Work → Design → Results → Discussion → Conclusion → Future Work → Appendices).
 >
@@ -12,23 +12,23 @@ Reproduction of **[SQLite is Enough. Lexical, Semantic, and Hybrid Search with s
 ## Quickstart (clone → demo in ~5 minutes)
 
 ```bash
-git clone <this repo> scrydb
-cd scrydb
+git clone <this repo> OneFind
+cd OneFind
 python -m venv .venv
 .venv\Scripts\activate                      # Windows
 # source .venv/bin/activate                  # Linux/macOS
 pip install -e ".[model,eval,serve]"
 
 # 1. prove the environment
-scrydb check --full
+OneFind check --full
 
 # 2. reproduce one BEIR dataset end-to-end (downloads, embeds, evaluates)
-scrydb eval scifact --db data/scifact.db
-scrydb eval nfcorpus --db data/nfcorpus.db
+OneFind eval scifact --db data/scifact.db
+OneFind eval nfcorpus --db data/nfcorpus.db
 
 # 3. or try a tiny in-memory demo with the included sample data
-scrydb index ./sample-data --db demo.db --embed
-scrydb serve --db demo.db --port 8080
+OneFind index ./sample-data --db demo.db --embed
+OneFind serve --db demo.db --port 8080
 # open http://127.0.0.1:8080/
 
 # 4. run the tests
@@ -45,7 +45,7 @@ pytest
 | `TEAM_PREPARATION.md` | **Full project briefing for the 3 teammates** — story, architecture, demo, Q&A |
 | `REPORT.md` | Earlier, shorter academic-style report |
 | `docs/01-prd.md` … `docs/07-references.md` | Six-document spec system (source of truth, versioned with code) |
-| `src/scrydb/` | The library + CLI + FastAPI demo |
+| `src/OneFind/` | The library + CLI + FastAPI demo |
 | `tests/` | pytest suite — 67 tests, model- and serve-extras gated |
 | `benchmarks/reports/` | Generated evaluation reports + review notes |
 | `demo/index.html` | Single-page demo UI (vanilla JS, no build step) |
@@ -116,7 +116,7 @@ Adds a second hybrid strategy to `hybrid_search` (CLI: `--fusion linear` + `--al
 - [x] Phase 3: Hybrid RRF + rerank (RRF k=60; ablation ≥5/10 curated wins)
 - [x] Phase 4: Reproduce BEIR results — SciFact & NFCorpus reports committed; qualitative paper claims confirmed
 - [x] Phase 5: Review (`benchmarks/reports/review-t09.md`) + alpha-sweep extension on both datasets
-- [x] Phase 6: Demo web app (`scrydb serve`) + publish polish — all PRD success signals met
+- [x] Phase 6: Demo web app (`OneFind serve`) + publish polish — all PRD success signals met
 - [x] Defense prep: `FORMAL_PROJECT_REPORT.md`, `HOW_TO_RUN.md`, `VIVA_QUESTIONS.md`, `TEAM_PREPARATION.md`
 
 ## What we learned / what surprised us
@@ -132,4 +132,4 @@ Adds a second hybrid strategy to `hybrid_search` (CLI: `--fusion linear` + `--al
 - Matryoshka-style dimension reduction for MiniLM
 - Watch-folder live re-index
 - Document-level chunking for application use-cases (BEIR eval stays whole-doc per ADR-4)
-- PyPI package name (upstream already owns `scrydb`; rename for any public release)
+- PyPI package name (upstream already owns `OneFind`; rename for any public release)

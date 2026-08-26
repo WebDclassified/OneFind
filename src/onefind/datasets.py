@@ -29,7 +29,7 @@ _REGISTRY = {
 
 def _download(url: str, target: Path) -> None:
     target.parent.mkdir(parents=True, exist_ok=True)
-    request = urllib.request.Request(url, headers={"User-Agent": "scrydb-reproduction/0.1"})
+    request = urllib.request.Request(url, headers={"User-Agent": "OneFind-reproduction/0.1"})
     with urllib.request.urlopen(request, timeout=120) as response, target.open("wb") as fh:
         while chunk := response.read(1 << 16):
             fh.write(chunk)

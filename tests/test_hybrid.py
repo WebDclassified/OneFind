@@ -4,17 +4,17 @@ import pytest
 
 st = pytest.importorskip("sentence_transformers")  # noqa: F401 - gates model tests
 
-from scrydb.embed import DEFAULT_MODEL, SentenceEmbedder  # noqa: E402
-from scrydb.errors import UsageError  # noqa: E402
-from scrydb.ingest import ingest_path  # noqa: E402
-from scrydb.search import (  # noqa: E402
+from onefind.embed import DEFAULT_MODEL, SentenceEmbedder  # noqa: E402
+from onefind.errors import UsageError  # noqa: E402
+from onefind.ingest import ingest_path  # noqa: E402
+from onefind.search import (  # noqa: E402
     hybrid_search,
     lexical_search,
     rrf_fuse,
     search,
     semantic_search,
 )
-from scrydb.store import Index  # noqa: E402
+from onefind.store import Index  # noqa: E402
 
 
 # ---- pure RRF math (no model) -------------------------------------------------

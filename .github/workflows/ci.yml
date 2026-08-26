@@ -1,4 +1,4 @@
-name: ci
+﻿name: ci
 
 on:
   push:
@@ -21,4 +21,4 @@ jobs:
       - name: Run tests
         run: pytest
       - name: Engine environment proof
-        run: scrydb check
+        run: OneFind check

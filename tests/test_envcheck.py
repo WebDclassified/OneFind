@@ -4,8 +4,8 @@ import json
 
 import pytest
 
-from scrydb import envcheck
-from scrydb.cli import EXIT_OK, EXIT_USAGE, main
+from onefind import envcheck
+from onefind.cli import EXIT_OK, EXIT_USAGE, main
 
 
 def test_fts5_detected_in_bundled_sqlite():

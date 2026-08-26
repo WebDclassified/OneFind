@@ -8,11 +8,11 @@ import pytest
 
 st = pytest.importorskip("sentence_transformers")  # noqa: F401 - gates the module
 
-from scrydb.embed import DEFAULT_MODEL, SentenceEmbedder  # noqa: E402
-from scrydb.errors import UsageError  # noqa: E402
-from scrydb.ingest import ingest_path  # noqa: E402
-from scrydb.search import lexical_search, search, semantic_search  # noqa: E402
-from scrydb.store import Index  # noqa: E402
+from onefind.embed import DEFAULT_MODEL, SentenceEmbedder  # noqa: E402
+from onefind.errors import UsageError  # noqa: E402
+from onefind.ingest import ingest_path  # noqa: E402
+from onefind.search import lexical_search, search, semantic_search  # noqa: E402
+from onefind.store import Index  # noqa: E402
 
 
 @pytest.fixture(scope="module")

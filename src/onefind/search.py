@@ -60,7 +60,7 @@ def _require_embedder(index):
     if getattr(index, "embedder", None) is None:
         raise UsageError(
             "no embedding model attached to this session; "
-            "rebuild the index with 'scrydb index --embed' first"
+            "rebuild the index with 'OneFind index --embed' first"
         )
     return index.embedder
 

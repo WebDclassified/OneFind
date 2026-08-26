@@ -6,17 +6,17 @@ import pytest
 pytest.importorskip("ranx")
 st = pytest.importorskip("sentence_transformers")  # noqa: F841
 
-from scrydb.embed import DEFAULT_MODEL, SentenceEmbedder  # noqa: E402
-from scrydb.errors import UsageError  # noqa: E402
-from scrydb.evaluate import run_alpha_sweep  # noqa: E402
-from scrydb.search import (  # noqa: E402
+from onefind.embed import DEFAULT_MODEL, SentenceEmbedder  # noqa: E402
+from onefind.errors import UsageError  # noqa: E402
+from onefind.evaluate import run_alpha_sweep  # noqa: E402
+from onefind.search import (  # noqa: E402
     Hit,
     hybrid_search,
     linear_fuse,
     rrf_fuse,
     search,
 )
-from scrydb.store import Index  # noqa: E402
+from onefind.store import Index  # noqa: E402
 
 
 # ---- pure linear_fuse math (no model) ----------------------------------------
@@ -73,7 +73,7 @@ def embedded_db(embedder, tmp_path_factory):
     db = tmp_path_factory.mktemp("t10") / "t10.db"
     with Index.open(db) as idx:
         idx.attach_embedder(embedder)
-        from scrydb.ingest import Document
+        from onefind.ingest import Document
 
         idx.add_documents([
             Document("d0", "oranges are citrus fruits rich in vitamin C", "Citrus"),

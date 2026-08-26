@@ -2,11 +2,11 @@
 
 import pytest
 
-from scrydb.cli import EXIT_OK, EXIT_USAGE, main
-from scrydb.errors import EmptyQueryError
-from scrydb.ingest import ingest_path
-from scrydb.search import lexical_search, sanitize_fts_query
-from scrydb.store import Index
+from onefind.cli import EXIT_OK, EXIT_USAGE, main
+from onefind.errors import EmptyQueryError
+from onefind.ingest import ingest_path
+from onefind.search import lexical_search, sanitize_fts_query
+from onefind.store import Index
 
 
 @pytest.fixture(scope="module")

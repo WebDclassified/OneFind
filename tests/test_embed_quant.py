@@ -3,7 +3,7 @@
 import numpy as np
 import pytest
 
-from scrydb.embed import (
+from onefind.embed import (
     calibrate_scale,
     compose_embed_text,
     pack_bits,

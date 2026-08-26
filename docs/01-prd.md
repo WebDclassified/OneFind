@@ -1,17 +1,17 @@
 # 01 · Product Requirements Document
 
-Project: scrydb reproduction · Version: v0.1 (draft) · Status: Proposed
+Project: OneFind reproduction · Version: v0.1 (draft) · Status: Proposed
 Owner: project author · Companion docs: 02–07 in this folder
 
 ## PRODUCT SUMMARY
 
-CS students / junior ML-and-IR engineers who want to understand and demonstrate modern hybrid retrieval currently face heavyweight alternatives (Elasticsearch, pgvector, hosted vector DBs); this project rebuilds the scrydb pipeline — FTS5 lexical + sqlite-vec semantic + RRF hybrid search inside one local SQLite file — from its paper, reproduces its BEIR evaluation directionally on affordable hardware, and ships a demo + written comparison as a portfolio artifact.
+CS students / junior ML-and-IR engineers who want to understand and demonstrate modern hybrid retrieval currently face heavyweight alternatives (Elasticsearch, pgvector, hosted vector DBs); this project rebuilds the OneFind pipeline — FTS5 lexical + sqlite-vec semantic + RRF hybrid search inside one local SQLite file — from its paper, reproduces its BEIR evaluation directionally on affordable hardware, and ships a demo + written comparison as a portfolio artifact.
 
 ## TARGET USER & CURRENT ALTERNATIVE
 
 - Primary: you (portfolio/research skill-building) plus evaluators (professors, interviewers reading the repo).
 - Secondary: developers prototyping agentic/RAG search who need zero-infra retrieval.
-- Current alternatives: Elasticsearch/OpenSearch (ops-heavy), Postgres+pgvector (server), Pinecone/Weaviate (cloud cost, data leaves machine), upstream scrydb itself (the object of study — we reimplement to learn, then compare).
+- Current alternatives: Elasticsearch/OpenSearch (ops-heavy), Postgres+pgvector (server), Pinecone/Weaviate (cloud cost, data leaves machine), upstream OneFind itself (the object of study — we reimplement to learn, then compare).
 
 ## V1 GOALS
 
@@ -30,7 +30,7 @@ CS students / junior ML-and-IR engineers who want to understand and demonstrate 
 
 ## REQUIREMENTS (must-have)
 
-**FR-01 Ingest** — Given a folder of `.txt`/`.md` files or a JSONL corpus, when `scrydb index <path> --db x.db` runs, then every document is stored and embedded; re-running is idempotent (upsert by stable doc id).
+**FR-01 Ingest** — Given a folder of `.txt`/`.md` files or a JSONL corpus, when `OneFind index <path> --db x.db` runs, then every document is stored and embedded; re-running is idempotent (upsert by stable doc id).
 Acceptance criteria: given empty folder → clear error, non-zero exit; given valid corpus → row counts match input; interrupted run leaves DB openable (transactional batches).
 
 **FR-02 Lexical search** — FTS5 BM25 ranking over indexed docs.
@@ -42,13 +42,13 @@ Acceptance: same query returns semantically related docs lacking exact keywords;
 **FR-04 Hybrid search** — RRF fusion of lexical + semantic rankings (paper's k parameter configurable, default per paper).
 Acceptance: fused ordering deterministic; `--mode lexical|semantic|hybrid` all reachable from CLI and API.
 
-**FR-05 Evaluation harness** — `scrydb eval --dataset scifact` downloads/prepares the BEIR set, runs all configurations, emits a markdown report with AP/RR/P@10/nDCG@10 per configuration and latency percentiles.
+**FR-05 Evaluation harness** — `OneFind eval --dataset scifact` downloads/prepares the BEIR set, runs all configurations, emits a markdown report with AP/RR/P@10/nDCG@10 per configuration and latency percentiles.
 Acceptance: report regenerates deterministically given fixed seeds/model; runs end-to-end on CPU laptop.
 
 **FR-06 Results documentation** — README table comparing ours vs paper direction (does hybrid ≥ best single mode? does binary/int8 lose little quality vs float?) with deviations explained.
 Acceptance: every number traceable to a committed report file.
 
-**FR-07 Demo serve** — `scrydb serve` opens a local-only page: query box, mode toggle, results with scores.
+**FR-07 Demo serve** — `OneFind serve` opens a local-only page: query box, mode toggle, results with scores.
 Acceptance: loading/empty/no-results/error states all implemented (see doc 03).
 
 ## SUCCESS SIGNALS
@@ -66,4 +66,4 @@ Acceptance: loading/empty/no-results/error states all implemented (see doc 03).
 - R2 (risk): paper's headline model is Qwen3-Embedding-8B; our smaller embedder will shift absolute numbers — mitigated by comparing against MTEB baselines for *our* model (ADR-3).
 - OQ1: Do you have any CUDA GPU? Default plan assumes CPU-only (MiniLM-class embedder). If a GPU exists, we add bge-base as a second model.
 - OQ2: Dataset scope confirmed as SciFact+NFCorpus core, FiQA stretch? (Touché/TREC-COVID excluded for scale.)
-- OQ3: Package name: upstream owns "scrydb". Default working name stays `scrydb` locally; rename (e.g. `scrylite`) before any public release.
+- OQ3: Package name: upstream owns "OneFind". Default working name stays `OneFind` locally; rename (e.g. `scrylite`) before any public release.

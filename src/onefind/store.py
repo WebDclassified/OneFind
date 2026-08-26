@@ -155,7 +155,7 @@ class Index:
         if not self.vec_ready:
             raise EnvError(
                 "sqlite-vec unavailable in this interpreter; "
-                "vector search disabled - run 'scrydb check' for the fix"
+                "vector search disabled - run 'OneFind check' for the fix"
             )
         existing_model = self.get_meta("model_name")
         if existing_model and existing_model != embedder.name:

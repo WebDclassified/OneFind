@@ -1,4 +1,4 @@
-"""T-11: localhost-only FastAPI demo for scrydb (docs/03 + docs/04).
+"""T-11: localhost-only FastAPI demo for OneFind (docs/03 + docs/04).
 
 Architecture
 - Static UI from `demo/index.html` served at GET /
@@ -71,7 +71,7 @@ def create_app(index_path: str | Path, *, reset_token: str | None = None):  # ty
     if SearchBody is None:  # type: ignore[unreachable]
         raise UsageError('serve needs the [serve] extra - pip install -e ".[serve]"')
 
-    app = FastAPI(title="scrydb demo", docs_url=None, redoc_url=None)
+    app = FastAPI(title="OneFind demo", docs_url=None, redoc_url=None)
     target = Path(index_path)
     _state: dict = {"index": None, "embedder_loaded": False, "reset_token": reset_token or uuid.uuid4().hex}
 
@@ -90,7 +90,7 @@ def create_app(index_path: str | Path, *, reset_token: str | None = None):  # ty
     def root() -> str:
         if _DEMO_HTML.exists():
             return _DEMO_HTML.read_text(encoding="utf-8")
-        return "<h1>scrydb demo</h1><p>index.html not found alongside the package.</p>"
+        return "<h1>OneFind demo</h1><p>index.html not found alongside the package.</p>"
 
     @app.get("/api/stats")
     def stats() -> dict:
@@ -111,7 +111,7 @@ def create_app(index_path: str | Path, *, reset_token: str | None = None):  # ty
             raise HTTPException(status_code=503, detail={
                 "code": "no_index",
                 "message": (f"no index at {target}. Run "
-                            f"'scrydb index <path> --db {target} --embed' first."),
+                            f"'OneFind index <path> --db {target} --embed' first."),
             })
         from .embed import SentenceEmbedder
         from .search import search as run_search

@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1" />
-<title>scrydb demo</title>
+<title>OneFind demo</title>
 <style>
   :root {
     --surface: #ffffff;
@@ -72,7 +72,7 @@
 </head>
 <body>
 <header>
-  <h1>scrydb demo</h1>
+  <h1>OneFind demo</h1>
   <div class="stats" id="stats" aria-live="polite">loading…</div>
 </header>
 <main>
@@ -128,7 +128,7 @@ async function loadStats() {
     if (s.documents === 0) {
       $stats.textContent = "no documents indexed";
       renderInfo("This demo has no index yet. Run "
-        + "<code>scrydb index ./sample-data --db demo.db --embed</code> "
+        + "<code>OneFind index ./sample-data --db demo.db --embed</code> "
         + "then restart the server.");
       return false;
     }

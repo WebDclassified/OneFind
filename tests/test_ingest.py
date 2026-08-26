@@ -4,9 +4,9 @@ import sqlite3
 
 import pytest
 
-from scrydb.ingest import ingest_path
-from scrydb.errors import CorpusNotFoundError
-from scrydb.store import Index
+from onefind.ingest import ingest_path
+from onefind.errors import CorpusNotFoundError
+from onefind.store import Index
 
 SAMPLE = "sample-data"
 
@@ -52,7 +52,7 @@ def test_empty_folder_raises_clear_error(db_path, tmp_path):
 
 def test_partial_batch_failure_leaves_db_openable(db_path, tmp_path):
     """A generator blowing up mid-stream must leave committed batches valid."""
-    from scrydb.store import Document
+    from onefind.store import Document
 
     def exploding_docs(n=300):
         for i in range(n):

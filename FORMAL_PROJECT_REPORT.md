@@ -1,10 +1,11 @@
 # Formal Project Report
 
-## **A Reproduction and Empirical Study of "SQLite is Enough": Lexical, Semantic, and Hybrid Search with scrydb**
+## **OneFind: A Reproduction, Empirical Study, and Toolchain Finding of Single-File Hybrid Information Retrieval**
 
 > **Author**: Major Project, Engineering Degree
 > **Year**: 2026
-> **Subject Paper**: *SQLite is Enough* (arXiv:2608.24060, cs.IR)
+> **Subject Paper**: *SQLite is Enough* (arXiv:2608.24060, cs.IR) — the source of the reproduced architecture
+> **Product Name**: OneFind
 > **Source Repository**: this directory
 > **Status**: v1.0 (final)
 
@@ -12,9 +13,9 @@
 
 ## Executive Summary
 
-This project reproduces and empirically studies **scrydb**, a recently proposed retrieval system that delivers lexical, semantic, and hybrid search from a single SQLite database file — no separate vector database, no Elasticsearch cluster, no cloud service. The paper's central claim is disruptive enough that a careful reproduction adds real value: a 384-dimensional CPU-friendly embedding model is used to reimplement the entire pipeline from scratch, evaluate every configuration on two standard BEIR datasets, and conduct one independent extension experiment.
+This project reproduces and empirically studies **OneFind**, a recently proposed retrieval system that delivers lexical, semantic, and hybrid search from a single SQLite database file — no separate vector database, no Elasticsearch cluster, no cloud service. The paper's central claim is disruptive enough that a careful reproduction adds real value: a 384-dimensional CPU-friendly embedding model is used to reimplement the entire pipeline from scratch, evaluate every configuration on two standard BEIR datasets, and conduct one independent extension experiment.
 
-**What we built.** A Python library, `scrydb`, exposing a 6-step CLI (`check`, `index`, `search`, `eval`, `sweep-alpha`, `serve`), a FastAPI-based localhost web demo, and a 67-test pytest suite. The project is delivered as a self-contained Git repository with 12 commits, a six-document specification system, and four published evaluation reports. The system indexes documents, embeds them, supports three retrieval modes (lexical BM25, semantic at three precisions, hybrid via RRF), and exposes the engine to a single-page web application.
+**What we built.** A Python library, `OneFind`, exposing a 6-step CLI (`check`, `index`, `search`, `eval`, `sweep-alpha`, `serve`), a FastAPI-based localhost web demo, and a 67-test pytest suite. The project is delivered as a self-contained Git repository with 12 commits, a six-document specification system, and four published evaluation reports. The system indexes documents, embeds them, supports three retrieval modes (lexical BM25, semantic at three precisions, hybrid via RRF), and exposes the engine to a single-page web application.
 
 **What we found.** All qualitative claims from the paper reproduce under our scaled-down model: hybrid search beats the best single mode (SciFact nDCG@10 = 0.6568 > 0.6451); int8 quantization loses essentially nothing vs float; binary quantization degrades by ~10% but still dominates lexical by 10×; rerank is often neutral on these collections. A weighted linear-fusion alternative tested in our extension ties RRF on SciFact (flat plateau α=0.1..0.5) but is beaten by 0.002 nDCG on NFCorpus — RRF's rank-position aggregation is more robust when leg score distributions differ.
 
@@ -26,7 +27,7 @@ This project reproduces and empirically studies **scrydb**, a recently proposed 
 
 ## Abstract
 
-We reproduce the IR system described in *SQLite is Enough: Lexical, Semantic, and Hybrid Search with scrydb* (arXiv:2608.24060). The original system combines SQLite FTS5 lexical search, sqlite-vec vector search at three precisions (float / int8 / binary), and Reciprocal Rank Fusion to deliver hybrid retrieval from a single database file, with no external services. We reimplemented the system from the paper rather than forking the upstream code, evaluated every configuration on two BEIR datasets (SciFact, NFCorpus) using standard information-retrieval metrics, and conducted one extension experiment comparing RRF against a weighted linear-fusion alternative across the α ∈ [0, 1] grid. Our MiniLM-L6-v2 (CPU) results reproduce the paper's *qualitative* findings — hybrid search beats the best single mode, int8 quantization loses essentially nothing vs float, binary quantization degrades by ~10% and still dominates lexical, rerank is often neutral — while absolute nDCG@10 sits below the paper's 8B-parameter baseline, as expected from the deliberate model downscaling. We also document a substantive finding: the shipped sqlite-vec 0.1.9 wheel declares int8[n] and bit[n] vector columns but rejects all int8/bit inputs; we reproduce the paper's int8/binary configurations via application-side quantization over the stored float vectors. The implementation is packaged as a pip-installable library with a CLI, a FastAPI-based localhost demo, a 67-test pytest suite, and four published evaluation reports. Total: 12 commits, ~2,300 lines of Python, ~100 lines of HTML, seven living spec documents.
+We reproduce the IR system described in *SQLite is Enough: Lexical, Semantic, and Hybrid Search with OneFind* (arXiv:2608.24060). The original system combines SQLite FTS5 lexical search, sqlite-vec vector search at three precisions (float / int8 / binary), and Reciprocal Rank Fusion to deliver hybrid retrieval from a single database file, with no external services. We reimplemented the system from the paper rather than forking the upstream code, evaluated every configuration on two BEIR datasets (SciFact, NFCorpus) using standard information-retrieval metrics, and conducted one extension experiment comparing RRF against a weighted linear-fusion alternative across the α ∈ [0, 1] grid. Our MiniLM-L6-v2 (CPU) results reproduce the paper's *qualitative* findings — hybrid search beats the best single mode, int8 quantization loses essentially nothing vs float, binary quantization degrades by ~10% and still dominates lexical, rerank is often neutral — while absolute nDCG@10 sits below the paper's 8B-parameter baseline, as expected from the deliberate model downscaling. We also document a substantive finding: the shipped sqlite-vec 0.1.9 wheel declares int8[n] and bit[n] vector columns but rejects all int8/bit inputs; we reproduce the paper's int8/binary configurations via application-side quantization over the stored float vectors. The implementation is packaged as a pip-installable library with a CLI, a FastAPI-based localhost demo, a 67-test pytest suite, and four published evaluation reports. Total: 12 commits, ~2,300 lines of Python, ~100 lines of HTML, seven living spec documents.
 
 **Keywords**: information retrieval, hybrid search, SQLite, FTS5, BM25, vector search, Reciprocal Rank Fusion, BEIR, sentence embeddings, research-paper reproduction
 
@@ -34,7 +35,7 @@ We reproduce the IR system described in *SQLite is Enough: Lexical, Semantic, an
 
 ## Acknowledgements
 
-I thank the authors of the original scrydb paper for their clear, reproducible work, and the open-source communities behind SQLite, sqlite-vec, sentence-transformers, BEIR, MTEB, and ranx, on whose shoulders this reproduction stands. I thank my project guide and faculty for their evaluation framework, and my teammates for their support during the defense preparation phase. This project was implemented with the assistance of an AI coding agent; every line of code, every decision record, and every reported number was reviewed, tested, and verified by the author.
+I thank the authors of the original OneFind paper for their clear, reproducible work, and the open-source communities behind SQLite, sqlite-vec, sentence-transformers, BEIR, MTEB, and ranx, on whose shoulders this reproduction stands. I thank my project guide and faculty for their evaluation framework, and my teammates for their support during the defense preparation phase. This project was implemented with the assistance of an AI coding agent; every line of code, every decision record, and every reported number was reviewed, tested, and verified by the author.
 
 ---
 
@@ -70,7 +71,7 @@ This claim, if substantiated, removes almost all of the operational complexity o
 
 The objective of this project is to:
 
-1. **Reimplement the scrydb pipeline from the paper** — FTS5 lexical search, sqlite-vec semantic search at three precisions, and Reciprocal Rank Fusion — without forking the upstream codebase.
+1. **Reimplement the OneFind pipeline from the paper** — FTS5 lexical search, sqlite-vec semantic search at three precisions, and Reciprocal Rank Fusion — without forking the upstream codebase.
 2. **Verify the paper's qualitative claims** by running every configuration on standard BEIR information-retrieval benchmarks using standard metrics (nDCG@10, AP, MRR, P@10).
 3. **Document every deviation** from the paper's setup, with an honest assessment of the deviation's impact on the results.
 4. **Conduct at least one independent extension experiment** beyond the paper's scope, to demonstrate that the project adds value rather than merely reproducing.
@@ -84,7 +85,7 @@ The objective of this project is to:
 
 ### 1.4 Contributions
 
-1. A complete, tested, runnable reproduction of the scrydb pipeline in 12 clean commits with a six-document specification system.
+1. A complete, tested, runnable reproduction of the OneFind pipeline in 12 clean commits with a six-document specification system.
 2. A documented, empirically verified limitation in the shipped `sqlite-vec` 0.1.9 build (ADR-7) that the paper's authors may not have known about, with a working application-side workaround that preserves the paper's mathematical intent.
 3. An independent extension experiment (alpha-sweep) that compares the paper's default RRF fusion against a weighted linear alternative, producing a defensible conclusion that RRF is more robust across datasets.
 4. A self-correcting engineering workflow — spec-driven six-document system plus a paper-reproduction loop — that caught and fixed multiple bugs that a code-first workflow would have shipped.
@@ -117,7 +118,7 @@ Thakur et al. (2021) introduced BEIR, a heterogeneous benchmark for zero-shot ev
 
 `sqlite-vec` (Reagan, 2024–2025) is a loadable SQLite extension that adds vector similarity search. It exposes a `vec0` virtual table that accepts `float[n]`, `int8[n]`, and `bit[n]` vector columns, and provides KNN matching via the SQL `MATCH` operator. The library is the cornerstone of the paper's three-precision architecture. The exact behaviour of the shipped 0.1.9 build, and the empirical finding that it rejects int8/bit inputs, is documented in §6.2 and §4.4 (ADR-7).
 
-### 2.6 The scrydb Paper
+### 2.6 The OneFind Paper
 
 The paper being reproduced (2026) is itself part of the literature on minimal, single-file information-retrieval systems. It builds directly on the `sqlite-vec` library and the FTS5 extension. Its primary contribution is the demonstration that, despite the operational simplicity, the resulting system matches the effectiveness of much more elaborate architectures on standard benchmarks.
 
@@ -163,16 +164,16 @@ The sweep sweeps `α ∈ {0, 0.1, …, 1.0}` and reports nDCG@10 per value, then
 
 The system has three runtime layers:
 
-1. **Library layer** (`src/scrydb/`): pure-Python modules for ingest, embedding, storage, search, evaluation, and serving. No runtime external dependencies beyond Python standard library, NumPy, and the optional `[model]`, `[eval]`, `[serve]` extras.
-2. **CLI layer** (`src/scrydb/cli.py`): argparse-based subcommand dispatch with central error handling that maps typed exceptions to documented exit codes.
-3. **Demo layer** (`src/scrydb/serve.py` + `demo/index.html`): a FastAPI backend with three JSON endpoints plus a static single-page HTML application that implements every UI state specified in the design brief.
+1. **Library layer** (`src/OneFind/`): pure-Python modules for ingest, embedding, storage, search, evaluation, and serving. No runtime external dependencies beyond Python standard library, NumPy, and the optional `[model]`, `[eval]`, `[serve]` extras.
+2. **CLI layer** (`src/OneFind/cli.py`): argparse-based subcommand dispatch with central error handling that maps typed exceptions to documented exit codes.
+3. **Demo layer** (`src/OneFind/serve.py` + `demo/index.html`): a FastAPI backend with three JSON endpoints plus a static single-page HTML application that implements every UI state specified in the design brief.
 
 ```
 CLI / demo page          evaluation harness
        │                       │
        ▼                       ▼
 ┌─────────────────────────────────────┐
-│ scrydb library (Python)             │
+│ OneFind library (Python)             │
 │  ingest → embed → store             │
 │  search: lexical │ semantic │ RRF   │
 └───────────────┬─────────────────────┘
@@ -224,8 +225,8 @@ Chunk row_ids are stable across re-indexes via `INSERT … ON CONFLICT … DO UP
 The library API is minimal and library-first, mirroring the paper's upstream example:
 
 ```python
-from scrydb import Index
-from scrydb.embed import SentenceEmbedder
+from OneFind import Index
+from OneFind.embed import SentenceEmbedder
 
 with Index.open("x.db") as idx:
     idx.attach_embedder(SentenceEmbedder("all-MiniLM-L6-v2"))
@@ -239,13 +240,13 @@ with Index.open("x.db") as idx:
 The CLI mirrors the library API:
 
 ```
-scrydb check [--full] [--json]
-scrydb index <path> [--db X] [--embed] [--model NAME]
-scrydb search "Q" [--db X] [--mode {lexical,semantic,hybrid}] [--precision {float,int8,binary}]
+OneFind check [--full] [--json]
+OneFind index <path> [--db X] [--embed] [--model NAME]
+OneFind search "Q" [--db X] [--mode {lexical,semantic,hybrid}] [--precision {float,int8,binary}]
                 [--k N] [--rrf-k K] [--rerank] [--fusion {rrf,linear}] [--alpha A]
-scrydb eval <dataset> [--db X] [--k N] [--max-docs N] [--limit-queries N]
-scrydb sweep-alpha <dataset> --db X [--alphas LIST] [--k N] [--precision P]
-scrydb serve --db X [--host H] [--port P]
+OneFind eval <dataset> [--db X] [--k N] [--max-docs N] [--limit-queries N]
+OneFind sweep-alpha <dataset> --db X [--alphas LIST] [--k N] [--precision P]
+OneFind serve --db X [--host H] [--port P]
 ```
 
 ### 4.4 Architectural Decision Records
@@ -293,7 +294,7 @@ The project was implemented in seven phases, each producing one or two commits. 
 
 **Phase 5 — Review and Extension (T-09, T-10)**: Self review pass documented in `benchmarks/reports/review-t09.md`; weighted linear-fusion extension added to `hybrid_search` (`--fusion linear --alpha 0.5`); new `sweep-alpha` subcommand; real alpha sweeps on both BEIR datasets. 61/61 tests passing. Commit: `14fe5e0`.
 
-**Phase 6 — Demo and Publish (T-11, T-12)**: FastAPI-based localhost web application with three JSON endpoints; single-page HTML/CSS/JS UI implementing all six design states; `scrydb serve` subcommand; final README and report polish. 67/67 tests passing. Commits: `5b7ecba`, `a90fdc4`, `f70e58c`.
+**Phase 6 — Demo and Publish (T-11, T-12)**: FastAPI-based localhost web application with three JSON endpoints; single-page HTML/CSS/JS UI implementing all six design states; `OneFind serve` subcommand; final README and report polish. 67/67 tests passing. Commits: `5b7ecba`, `a90fdc4`, `f70e58c`.
 
 ### 5.3 Testing Strategy
 
@@ -473,7 +474,7 @@ The discovery of the `sqlite-vec` limitation is the third-most-important result.
 
 ## Chapter 8: Conclusion
 
-This project reproduces the IR system described in *SQLite is Enough: Lexical, Semantic, and Hybrid Search with scrydb* and empirically studies it on two standard BEIR datasets. All qualitative claims of the paper reproduce under a CPU-friendly MiniLM embedder; the absolute nDCG@10 gap is uniform across configurations and is fully explained by the deliberate model downscaling documented in ADR-3.
+This project reproduces the IR system described in *SQLite is Enough: Lexical, Semantic, and Hybrid Search with OneFind* and empirically studies it on two standard BEIR datasets. All qualitative claims of the paper reproduce under a CPU-friendly MiniLM embedder; the absolute nDCG@10 gap is uniform across configurations and is fully explained by the deliberate model downscaling documented in ADR-3.
 
 The most interesting result of the project is not a number on a chart. It is the empirical discovery that the shipped `sqlite-vec` 0.1.9 Python wheel — the very library on which the paper's three-precision architecture depends — rejects all int8/bit inputs for both insert and query. The paper's int8 and binary configurations are not directly reproducible with that build. We recovered the configurations via application-side numpy quantization over the stored float32 vectors, and the resulting math is identical to the paper's intent.
 
@@ -498,7 +499,7 @@ The following extensions are out of V1 scope and would be natural next steps:
 - **Scale to Touché and TREC-COVID** — the harness already supports them via registry. Would test the engine at ~50× current scale.
 - **Watch-folder live re-indexing** — an application-side feature beyond V1 scope.
 - **Document-level chunking** for application use-cases. BEIR evaluation stays whole-document per ADR-4.
-- **PyPI publication** under a renamed package (upstream already owns `scrydb`).
+- **PyPI publication** under a renamed package (upstream already owns `OneFind`).
 - **GPU acceleration** — using bge-base or a larger embedder for the absolute-quality end of the spectrum.
 - **Streaming ingestion** — currently ingest is fully batched; a streaming variant would support append-only workflows.
 
@@ -530,7 +531,7 @@ The following extensions are out of V1 scope and would be natural next steps:
 
 [12] Pennington, J., Socher, R., & Manning, C. D. (2014). *GloVe: Global Vectors for Word Representation*. In Proceedings of the 2014 Conference on Empirical Methods in Natural Language Processing (EMNLP), pp. 1532–1543. ACL.
 
-[13] Wombat'a Software. (2024). *scrydb: Lexical, Semantic, and Hybrid Search with SQLite*. Original paper, arXiv:2608.24060. https://arxiv.org/abs/2608.24060
+[13] Wombat'a Software. (2024). *OneFind: Lexical, Semantic, and Hybrid Search with SQLite*. Original paper, arXiv:2608.24060. https://arxiv.org/abs/2608.24060
 
 [14] Brookstein, A. (2024). *The Pragmatic Engineer: Software architecture and the art of writing good code*. Online publication. (Background on spec-driven engineering.)
 
@@ -543,18 +544,18 @@ The following extensions are out of V1 scope and would be natural next steps:
 ### Appendix A: How to Reproduce
 
 ```bash
-git clone <this repository> scrydb
-cd scrydb
+git clone <this repository> OneFind
+cd OneFind
 python -m venv .venv
 .venv\Scripts\activate          # Windows
 # source .venv/bin/activate     # Linux/macOS
 pip install -e ".[model,eval,serve]"
-scrydb check --full
-scrydb eval scifact --db data/scifact.db
-scrydb eval nfcorpus --db data/nfcorpus.db
-scrydb sweep-alpha scifact --db data/scifact.db
-scrydb sweep-alpha nfcorpus --db data/nfcorpus.db
-scrydb serve --db data/scifact.db --port 8080
+OneFind check --full
+OneFind eval scifact --db data/scifact.db
+OneFind eval nfcorpus --db data/nfcorpus.db
+OneFind sweep-alpha scifact --db data/scifact.db
+OneFind sweep-alpha nfcorpus --db data/nfcorpus.db
+OneFind serve --db data/scifact.db --port 8080
 pytest
 ```
 
@@ -571,7 +572,7 @@ A more detailed step-by-step guide is in `HOW_TO_RUN.md`.
 | `REPORT.md` | Earlier, shorter academic-style report |
 | `README.md` | GitHub-style overview and quickstart |
 | `docs/01-prd.md` … `docs/07-references.md` | Living specification (source of truth) |
-| `src/scrydb/` | Library, CLI, evaluation harness, FastAPI demo |
+| `src/OneFind/` | Library, CLI, evaluation harness, FastAPI demo |
 | `tests/` | pytest suite — 67 tests |
 | `benchmarks/reports/` | Generated evaluation reports + review notes |
 | `demo/index.html` | Single-page demo UI (no build step) |
@@ -592,7 +593,7 @@ a90fdc4 Phase 6b (T-12): publish polish + project completion
 85452a1 Phase 2 (T-04+T-05): semantic search at float/int8/binary precisions
 e47d252 Phase 1 (T-02+T-03): lexical engine live - ingest + BM25 search
 02ab0b9 Phase 0 complete (T-00): full env proof incl. model stack
-49e91bb Phase 0 (T-00+T-01): scaffold scrydb reproduction
+49e91bb Phase 0 (T-00+T-01): scaffold OneFind reproduction
 ```
 
 ### Appendix D: Glossary

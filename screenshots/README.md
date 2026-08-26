@@ -1,18 +1,18 @@
 # Demo screenshots / visual evidence
 
-The project ships a localhost web demo at `scrydb serve --db <index>`.
+The project ships a localhost web demo at `OneFind serve --db <index>`.
 
 ## How to capture screenshots for evaluation submission
 
 1. **Build an index** (one-time, ~3 minutes for SciFact on CPU):
    ```bash
-   scrydb eval scifact --db data/scifact.db
+   OneFind eval scifact --db data/scifact.db
    ```
    This also generates the markdown reports in `benchmarks/reports/`.
 
 2. **Start the server**:
    ```bash
-   scrydb serve --db data/scifact.db --port 8080
+   OneFind serve --db data/scifact.db --port 8080
    ```
 
 3. **Open the browser** to <http://127.0.0.1:8080/> and capture the
@@ -38,7 +38,7 @@ The project ships a localhost web demo at `scrydb serve --db <index>`.
 
 ## Notes
 
-- The first `scrydb serve` call with a `mode=semantic` or `mode=hybrid`
+- The first `OneFind serve` call with a `mode=semantic` or `mode=hybrid`
   query will take 1–2 seconds (MiniLM model load + 5K-doc distance
   compute). Subsequent queries are sub-150 ms p95.
 - The UI is single-page vanilla JS — no build step, no node_modules,

@@ -1,6 +1,6 @@
 # 06 · Engineering Implementation Plan
 
-Project: scrydb reproduction · Version: v0.1 (draft) · Status: Proposed
+Project: OneFind reproduction · Version: v0.1 (draft) · Status: Proposed
 Execution model: **paper-reproduction loop** — each phase = read relevant paper section → implement one task → test → compare against paper behavior → commit with evidence. AI assists per-task, never generates whole phases.
 
 ## Phase map (reproduction guide steps → phases)
@@ -17,7 +17,7 @@ Execution model: **paper-reproduction loop** — each phase = read relevant pape
 ## Tasks
 
 ### T-00 · Environment proof (P0)
-Outcome: `scrydb check` passes on target laptop. Deps: none.
+Outcome: `OneFind check` passes on target laptop. Deps: none.
 Notes: verify FTS5 in bundled SQLite; install sqlite-vec; download MiniLM; record versions in `benchmarks/env-<date>.md`.
 Acceptance: check exits 0 listing sqlite/fts5/vec/model versions; exit 3 with named fix when an extension is absent.
 Tests: unit test mocking missing extension path. Evidence: terminal transcript committed to docs.

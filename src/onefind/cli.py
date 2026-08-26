@@ -1,4 +1,4 @@
-"""scrydb command-line interface.
+"""OneFind command-line interface.
 
 Exit codes (docs/03-app-flow.md):
 0 success · 2 usage/validation · 3 environment · 4 data error
@@ -23,7 +23,7 @@ def _print_human(report: dict) -> None:
     def flag(ok: bool) -> str:
         return "OK  " if ok else "FAIL"
 
-    print("scrydb check")
+    print("OneFind check")
     print(f"  python     : {report['python']}")
     print(f"  sqlite     : {report['sqlite']['version']}")
     print(f"  fts5       : {flag(report['sqlite']['fts5']['ok'])} {report['sqlite']['fts5']['detail']}")
@@ -137,7 +137,7 @@ def cmd_search(args: argparse.Namespace) -> int:
             model_name = index.get_meta("model_name")
             if model_name is None:
                 raise UsageError(
-                    "this index has no embeddings; rebuild with 'scrydb index --embed'"
+                    "this index has no embeddings; rebuild with 'OneFind index --embed'"
                 )
             print(f"loading embedding model: {model_name} ...")
             from .embed import SentenceEmbedder
@@ -158,7 +158,7 @@ def cmd_serve(args: argparse.Namespace) -> int:
     from .serve import create_app
 
     app = create_app(args.db, reset_token=args.reset_token)
-    print(f"scrydb serving on http://{args.host}:{args.port} (db: {args.db})")
+    print(f"OneFind serving on http://{args.host}:{args.port} (db: {args.db})")
     uvicorn.run(app, host=args.host, port=args.port, log_level=args.log_level)
     return EXIT_OK
 
@@ -169,8 +169,8 @@ def _not_yet(phase_hint: str) -> int:
 
 
 def build_parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(prog="scrydb", description=__doc__)
-    parser.add_argument("--version", action="version", version=f"scrydb {__version__}")
+    parser = argparse.ArgumentParser(prog="OneFind", description=__doc__)
+    parser.add_argument("--version", action="version", version=f"OneFind {__version__}")
     sub = parser.add_subparsers(dest="command", required=True)
 
     p_check = sub.add_parser("check", help="verify SQLite FTS5 + sqlite-vec + model stack")
@@ -182,7 +182,7 @@ def build_parser() -> argparse.ArgumentParser:
 
     p_index = sub.add_parser("index", help="index a folder of .txt/.md files into a database")
     p_index.add_argument("path", help="corpus folder")
-    p_index.add_argument("--db", default="scrydb.db", help="target SQLite file (default scrydb.db)")
+    p_index.add_argument("--db", default="OneFind.db", help="target SQLite file (default OneFind.db)")
     p_index.add_argument(
         "--embed",
         action="store_true",
@@ -193,7 +193,7 @@ def build_parser() -> argparse.ArgumentParser:
 
     p_search = sub.add_parser("search", help="query an index")
     p_search.add_argument("query")
-    p_search.add_argument("--db", default="scrydb.db")
+    p_search.add_argument("--db", default="OneFind.db")
     p_search.add_argument(
         "--mode", choices=["lexical", "semantic", "hybrid"], default="hybrid"
     )

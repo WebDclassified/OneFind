@@ -5,10 +5,10 @@ import pytest
 pytest.importorskip("fastapi")
 httpx = pytest.importorskip("httpx")  # required by TestClient under starlette>=0.27
 
-from scrydb.errors import UsageError  # noqa: E402
-from scrydb.ingest import ingest_path  # noqa: E402
-from scrydb.serve import create_app  # noqa: E402
-from scrydb.store import Index  # noqa: E402
+from onefind.errors import UsageError  # noqa: E402
+from onefind.ingest import ingest_path  # noqa: E402
+from onefind.serve import create_app  # noqa: E402
+from onefind.store import Index  # noqa: E402
 
 
 @pytest.fixture()
@@ -27,7 +27,7 @@ def test_root_serves_html(client):
     c, _ = client
     r = c.get("/")
     assert r.status_code == 200
-    assert "scrydb demo" in r.text
+    assert "OneFind demo" in r.text
     assert 'id="q"' in r.text
 
 

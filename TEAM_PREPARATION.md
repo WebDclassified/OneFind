@@ -24,9 +24,9 @@ If you have a question you cannot answer after reading this document and the sou
 
 ## Section 0: The Project at a Glance
 
-**The claim we are testing.** A recently published paper, *SQLite is Enough: Lexical, Semantic, and Hybrid Search with scrydb*, claims that a single SQLite database file is enough to deliver production-quality hybrid retrieval (lexical + semantic search, fused). The claim is disruptive because the standard architecture requires a separate vector database, a separate lexical index, and an orchestration layer.
+**The claim we are testing.** A recently published paper, *SQLite is Enough: Lexical, Semantic, and Hybrid Search with OneFind*, claims that a single SQLite database file is enough to deliver production-quality hybrid retrieval (lexical + semantic search, fused). The claim is disruptive because the standard architecture requires a separate vector database, a separate lexical index, and an orchestration layer.
 
-**The project.** Reimplement the scrydb system from the paper, run it on two standard information-retrieval benchmarks, document any deviations, and conduct one independent extension experiment.
+**The project.** Reimplement the OneFind system from the paper, run it on two standard information-retrieval benchmarks, document any deviations, and conduct one independent extension experiment.
 
 **What we built.** A Python library, a CLI, a FastAPI web demo, a 67-test test suite, four published evaluation reports, and seven living spec documents. All in 12 clean commits.
 
@@ -43,7 +43,7 @@ The project progressed through seven phases over the development period. Knowing
 
 ### Day 1: Choosing the paper
 
-We started by browsing `https://arxiv.org/archive/cs` for IR and database papers. The scrydb paper caught our attention because:
+We started by browsing `https://arxiv.org/archive/cs` for IR and database papers. The OneFind paper caught our attention because:
 1. The central claim is counter-intuitive and operationally significant.
 2. The authors released MIT-licensed code, so a reproduction is feasible.
 3. The paper covers a range of retrieval modes (lexical, semantic at three precisions, hybrid), giving us a multi-dimensional experimental surface.
@@ -52,7 +52,7 @@ We did not pick a paper because it was "easy" or because the field was "hot". We
 
 ### Phase 0 (foundation): 1–2 days
 
-We set up the project skeleton: a six-document specification system (PRD, Technical Design, App Flow, UI/UX Brief, Backend Design, Engineering Plan), a `pyproject.toml` with a CLI entry point, a sample corpus, a `scrydb check` command for environment proof, and a CI workflow.
+We set up the project skeleton: a six-document specification system (PRD, Technical Design, App Flow, UI/UX Brief, Backend Design, Engineering Plan), a `pyproject.toml` with a CLI entry point, a sample corpus, a `OneFind check` command for environment proof, and a CI workflow.
 
 The environment-proof step is the first engineering discipline of the project: before any code is written, we prove that the runtime can host the work. The proof caught one real issue (FTS5 schema-qualified names in `bm25()`) before the lexical engine was built on top of it.
 
@@ -90,7 +90,7 @@ We did a self review pass (T-09) and an extension experiment (T-10). The extensi
 
 We built the FastAPI-based localhost web demo and polished the README and report. The demo implements every UI state specified in the design brief (loading, empty, no-results, error, results, info). The README is structured to satisfy both GitHub visitors and engineering evaluators.
 
-**Key discipline**: the demo is a real-time system, not a video. A reviewer can run `scrydb serve` and interact with the system, which is the strongest possible demonstration that the project works.
+**Key discipline**: the demo is a real-time system, not a video. A reviewer can run `OneFind serve` and interact with the system, which is the strongest possible demonstration that the project works.
 
 ---
 
@@ -112,7 +112,7 @@ The system has three runtime layers: the library, the CLI, and the demo. All thr
 
 ```
                 ┌─────────────────────────────────────┐
-                │           scrydb library            │
+                │           OneFind library            │
                 │  ingest → embed → store → search   │
                 └────────────────┬────────────────────┘
                                  │
@@ -144,7 +144,7 @@ You do not need to know every line of code. You need to know what each phase acc
 
 ### Phase 0 — Foundation
 
-**What we built.** A package skeleton, a six-document specification, a sample corpus, and a `scrydb check` command that verifies the runtime environment.
+**What we built.** A package skeleton, a six-document specification, a sample corpus, and a `OneFind check` command that verifies the runtime environment.
 
 **Key trade-off.** Lightweight dependencies (no PyTorch until you ask for it). The base install is `pip install -e .`; the `[model]` extra pulls in sentence-transformers. This means a fresh machine can verify the environment in seconds, without waiting for a 200 MB download.
 
@@ -182,7 +182,7 @@ You do not need to know every line of code. You need to know what each phase acc
 
 **What we built.** A FastAPI-based localhost web application with three JSON endpoints (`/api/stats`, `/api/search`, `/api/reset`) and a single-page HTML application that implements every UI state specified in the design brief. A polished README and a complete formal report.
 
-**Key trade-off.** Vanilla JavaScript in the front-end. No build step, no node_modules, no framework. A reviewer can run `scrydb serve` and interact with the system immediately.
+**Key trade-off.** Vanilla JavaScript in the front-end. No build step, no node_modules, no framework. A reviewer can run `OneFind serve` and interact with the system immediately.
 
 ---
 
@@ -211,7 +211,7 @@ The project has nine ADRs. Five of them are central to the defense. Memorize the
 
 ### ADR-1: Reimplement rather than fork
 
-We chose to reimplement the scrydb pipeline from the paper rather than fork the upstream MIT-licensed code. A fork would have produced a working artifact in days; a reimplementation took weeks. But the reimplementation is what makes the engineering value defensible: every behavior is justified by the paper (or a documented deviation), not inherited as black-box code from a library we did not read.
+We chose to reimplement the OneFind pipeline from the paper rather than fork the upstream MIT-licensed code. A fork would have produced a working artifact in days; a reimplementation took weeks. But the reimplementation is what makes the engineering value defensible: every behavior is justified by the paper (or a documented deviation), not inherited as black-box code from a library we did not read.
 
 ### ADR-3: MiniLM instead of Qwen3-Embedding-8B
 
@@ -238,7 +238,7 @@ Practice this on your own machine before the defense.
 ### 7.1 Build the index (if not already done)
 
 ```bash
-scrydb eval scifact --db data/scifact.db
+OneFind eval scifact --db data/scifact.db
 ```
 
 This takes 2–3 minutes. It downloads the BEIR dataset, embeds all 5,183 documents, and writes a report. Do not skip this step on the day of the defense.
@@ -246,7 +246,7 @@ This takes 2–3 minutes. It downloads the BEIR dataset, embeds all 5,183 docume
 ### 7.2 Start the server
 
 ```bash
-scrydb serve --db data/scifact.db --port 8080
+OneFind serve --db data/scifact.db --port 8080
 ```
 
 The server prints a message confirming it is listening. Open a browser to `http://127.0.0.1:8080/`.
@@ -257,7 +257,7 @@ Walk through the following states. Each one is a different part of the design br
 
 | State | How to trigger it |
 |---|---|
-| Empty (no index) | Use a non-existent db path: `scrydb serve --db nonexistent.db --port 8080` |
+| Empty (no index) | Use a non-existent db path: `OneFind serve --db nonexistent.db --port 8080` |
 | Empty (index but no query) | Open the UI; the page renders with an empty query box |
 | Loading | Type a query and submit; for the first semantic query, loading takes ~1 second |
 | Results (lexical) | Query "vitamin C supplementation" with mode = lexical |
@@ -313,7 +313,7 @@ A complete list is in `VIVA_QUESTIONS.md`. The most likely questions for you to 
 
 ### Q: Show me the search query.
 
-> Open `src/scrydb/search.py` and walk through the BM25 query, explaining:
+> Open `src/OneFind/search.py` and walk through the BM25 query, explaining:
 > - `-bm25(fts)` makes "higher is better" (semantic uses the same convention)
 > - `snippet(fts, -1, '[', ']', ' … ', 12)` produces highlighted snippets
 > - `ORDER BY score ASC, doc_id ASC` ensures determinism
@@ -391,10 +391,10 @@ A 5-day preparation plan that should leave you confident for the defense.
 
 ### Day 3: Read the code (120 min)
 
-1. Read `src/scrydb/store.py` (the data model).
-2. Read `src/scrydb/search.py` (the search modes).
-3. Read `src/scrydb/embed.py` (the embedder and quantizers).
-4. Read `src/scrydb/evaluate.py` (the evaluation harness).
+1. Read `src/OneFind/store.py` (the data model).
+2. Read `src/OneFind/search.py` (the search modes).
+3. Read `src/OneFind/embed.py` (the embedder and quantizers).
+4. Read `src/OneFind/evaluate.py` (the evaluation harness).
 5. Skim the other modules.
 
 ### Day 4: Practice defending (90 min)
@@ -451,17 +451,17 @@ Print this card and bring it to the defense.
 
 ```
 ┌──────────────────────────────────────────────────────────┐
-│  PROJECT:  scrydb reproduction                           │
+│  PROJECT:  OneFind reproduction                           │
 │  PAPER:    arXiv:2608.24060, *SQLite is Enough*          │
 │  HEADLINE:  hybrid nDCG@10 = 0.6568 on SciFact          │
 │                                                         │
 │  COMMANDS                                                │
-│    scrydb check [--full]                                │
-│    scrydb index <path> --db X --embed                    │
-│    scrydb search "Q" --db X --mode {lex|sem|hyb}        │
-│    scrydb eval <dataset> --db X                          │
-│    scrydb sweep-alpha <dataset> --db X                   │
-│    scrydb serve --db X --port 8080                       │
+│    OneFind check [--full]                                │
+│    OneFind index <path> --db X --embed                    │
+│    OneFind search "Q" --db X --mode {lex|sem|hyb}        │
+│    OneFind eval <dataset> --db X                          │
+│    OneFind sweep-alpha <dataset> --db X                   │
+│    OneFind serve --db X --port 8080                       │
 │    pytest                                                │
 │                                                         │
 │  ADRs to remember                                        │
@@ -480,7 +480,7 @@ Print this card and bring it to the defense.
 │  FILES TO REMEMBER                                       │
 │    docs/02 ADR records                                  │
 │    docs/06 engineering plan                             │
-│    src/scrydb/{store,search,embed,evaluate,serve}.py    │
+│    src/OneFind/{store,search,embed,evaluate,serve}.py    │
 │    benchmarks/reports/*.md                              │
 │                                                         │
 │  IF ASKED "I don't know":                               │
@@ -500,10 +500,10 @@ Use this list on the day of the defense.
 - [ ] Laptop fully charged; power cable packed.
 - [ ] Project repo cloned and working directory ready.
 - [ ] `pip install -e ".[model,eval,serve]"` already run (no install delays).
-- [ ] `scrydb check` passes (or you have a story about why it doesn't).
+- [ ] `OneFind check` passes (or you have a story about why it doesn't).
 - [ ] `data/scifact.db` is built (no need to re-run the full eval on the day).
 - [ ] `data/nfcorpus.db` is built.
-- [ ] `scrydb serve` starts cleanly on port 8080.
+- [ ] `OneFind serve` starts cleanly on port 8080.
 - [ ] `pytest` passes.
 - [ ] Browser bookmarked to `http://127.0.0.1:8080/`.
 - [ ] Markdown reports open in a viewer for quick reference.

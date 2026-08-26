@@ -1,4 +1,4 @@
-# Major Project Report — scrydb reproduction
+# Major Project Report — OneFind reproduction
 
 > **Submission-style technical report.** This document is the academic
 > write-up of the project; the running code and CLI live in this repo,
@@ -10,7 +10,7 @@
 ## Abstract
 
 This project reproduces the IR system described in *SQLite is Enough.
-Lexical, Semantic, and Hybrid Search with scrydb* (arXiv:2608.24060).
+Lexical, Semantic, and Hybrid Search with OneFind* (arXiv:2608.24060).
 The original system combines SQLite FTS5 lexical search, sqlite-vec
 vector search at three precisions (float / int8 / binary), and
 Reciprocal Rank Fusion (RRF) to deliver hybrid retrieval from a single
@@ -53,7 +53,7 @@ trade-offs a practitioner needs to know.
 
 ### 1.2 Problem statement
 
-Reimplement the scrydb pipeline (FTS5 lexical + sqlite-vec semantic at
+Reimplement the OneFind pipeline (FTS5 lexical + sqlite-vec semantic at
 three precisions + RRF hybrid) from the published paper, evaluate every
 configuration against a standard IR benchmark, document deviations and
 their impact, conduct one independent extension experiment, and ship a
@@ -162,7 +162,7 @@ CLI / demo page               evaluation harness
        │                              │
        ▼                              ▼
 ┌─────────────────────────────────────┐
-│ scrydb library (Python)             │
+│ OneFind library (Python)             │
 │  ingest → embed → store             │
 │  search: lexical │ semantic │ RRF   │
 └───────────────┬─────────────────────┘
@@ -346,21 +346,21 @@ contributions are:
 - **Document-level chunking** for application use-cases; BEIR
   evaluation stays whole-document per ADR-4.
 - **PyPI publication** under a renamed package (upstream already
-  owns `scrydb`).
+  owns `OneFind`).
 
 ## Appendix A: How to reproduce
 
 ```bash
-git clone <this repo> scrydb
-cd scrydb
+git clone <this repo> OneFind
+cd OneFind
 python -m venv .venv && .venv\Scripts\activate   # Windows
 pip install -e ".[model,eval,serve]"
-scrydb check --full
-scrydb eval scifact --db data/scifact.db
-scrydb eval nfcorpus --db data/nfcorpus.db
-scrydb sweep-alpha scifact --db data/scifact.db
-scrydb sweep-alpha nfcorpus --db data/nfcorpus.db
-scrydb serve --db data/scifact.db --port 8080
+OneFind check --full
+OneFind eval scifact --db data/scifact.db
+OneFind eval nfcorpus --db data/nfcorpus.db
+OneFind sweep-alpha scifact --db data/scifact.db
+OneFind sweep-alpha nfcorpus --db data/nfcorpus.db
+OneFind serve --db data/scifact.db --port 8080
 pytest
 ```
 
@@ -371,7 +371,7 @@ pytest
 | `REPORT.md` | This document — academic report |
 | `README.md` | GitHub-style overview and quickstart |
 | `docs/01-prd.md` … `docs/07-references.md` | Living specification (source of truth) |
-| `src/scrydb/` | Library, CLI, evaluation harness, FastAPI demo |
+| `src/OneFind/` | Library, CLI, evaluation harness, FastAPI demo |
 | `tests/` | pytest suite — 67 tests |
 | `benchmarks/reports/` | Generated evaluation reports + review notes |
 | `demo/index.html` | Single-page demo UI (no build step) |
@@ -390,5 +390,5 @@ a90fdc4 Phase 6b (T-12): publish polish + project completion
 85452a1 Phase 2 (T-04+T-05): semantic search at float/int8/binary precisions
 e47d252 Phase 1 (T-02+T-03): lexical engine live - ingest + BM25 search
 02ab0b9 Phase 0 complete (T-00): full env proof incl. model stack
-49e91bb Phase 0 (T-00+T-01): scaffold scrydb reproduction
+49e91bb Phase 0 (T-00+T-01): scaffold OneFind reproduction
 ```

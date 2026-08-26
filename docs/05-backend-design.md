@@ -1,6 +1,6 @@
 # 05 · Backend Design & Data Model
 
-Project: scrydb reproduction · Version: v0.1 (draft) · Status: Proposed
+Project: OneFind reproduction · Version: v0.1 (draft) · Status: Proposed
 Storage engine: one SQLite file containing relational tables, FTS5 index, and sqlite-vec virtual tables.
 
 ## Tables
@@ -55,7 +55,7 @@ hits = idx.search("vitamin B12", mode="hybrid", precision="float", rerank=False,
 
 Errors raise typed exceptions: `ExtensionMissingError(3)`, `SchemaMismatchError(3)`, `EmptyQueryError(2)`, `CorpusNotFoundError(4)`.
 
-## HTTP API (`scrydb serve`, localhost only)
+## HTTP API (`OneFind serve`, localhost only)
 
 | Method/Path | Body → Response | Failure |
 |---|---|---|

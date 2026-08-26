@@ -10,7 +10,7 @@ This document is a study guide for the project defense (viva voce). It lists the
 
 ### Q1.1 What is the project about, in two sentences?
 
-**Model answer.** The project reproduces the scrydb system proposed in arXiv:2608.24060, which delivers lexical, semantic, and hybrid information retrieval from a single SQLite database file. We reimplemented the pipeline, evaluated every configuration on two BEIR datasets, and conducted an independent alpha-sweep extension.
+**Model answer.** The project reproduces the OneFind system proposed in arXiv:2608.24060, which delivers lexical, semantic, and hybrid information retrieval from a single SQLite database file. We reimplemented the pipeline, evaluated every configuration on two BEIR datasets, and conducted an independent alpha-sweep extension.
 
 **Ground truth**: `README.md` (one-paragraph description); `FORMAL_PROJECT_REPORT.md` (Executive Summary).
 
@@ -30,7 +30,7 @@ This document is a study guide for the project defense (viva voce). It lists the
 ### Q1.4 What are the contributions of the project?
 
 **Model answer.** Four contributions, in order of importance:
-1. A complete, tested, runnable reproduction of the scrydb pipeline in 12 clean commits.
+1. A complete, tested, runnable reproduction of the OneFind pipeline in 12 clean commits.
 2. A documented, empirically verified limitation in the shipped `sqlite-vec` 0.1.9 build (ADR-7), with a working application-side workaround that preserves the paper's mathematical intent.
 3. An independent extension experiment (alpha sweep) that compares RRF against a weighted linear alternative, producing a defensible conclusion that RRF is more robust across datasets.
 4. A six-document specification system that demonstrates engineering discipline beyond the code.
@@ -44,9 +44,9 @@ This document is a study guide for the project defense (viva voce). It lists the
 ### 🟢 Q2.1 Explain the overall architecture.
 
 **Model answer.** Three layers:
-- **Library** (`src/scrydb/`) — pure-Python modules for ingest, embedding, storage, search, evaluation, and serving.
-- **CLI** (`src/scrydb/cli.py`) — argparse-based subcommand dispatch with central error handling that maps typed exceptions to exit codes.
-- **Demo** (`src/scrydb/serve.py` + `demo/index.html`) — a FastAPI backend with three JSON endpoints plus a static single-page HTML application that implements every UI state specified in the design brief.
+- **Library** (`src/OneFind/`) — pure-Python modules for ingest, embedding, storage, search, evaluation, and serving.
+- **CLI** (`src/OneFind/cli.py`) — argparse-based subcommand dispatch with central error handling that maps typed exceptions to exit codes.
+- **Demo** (`src/OneFind/serve.py` + `demo/index.html`) — a FastAPI backend with three JSON endpoints plus a static single-page HTML application that implements every UI state specified in the design brief.
 
 The data layer is a single SQLite file containing relational tables (documents, chunks, schema_meta), the FTS5 virtual table for lexical search, and the `vec_float` virtual table for vector search. All retrieval happens against this one file.
 
@@ -63,7 +63,7 @@ The data layer is a single SQLite file containing relational tables (documents, 
 
 A subtle but important detail: chunk `row_id` is stable across re-indexes via `INSERT ... ON CONFLICT ... DO UPDATE ... RETURNING row_id`, so the `vec_float` table keys off chunks without orphaning rows on re-ingest.
 
-**Source**: `docs/05-backend-design.md`; `src/scrydb/store.py`.
+**Source**: `docs/05-backend-design.md`; `src/OneFind/store.py`.
 
 ### Q2.3 How does the search pipeline work end-to-end?
 
@@ -83,13 +83,13 @@ For a hybrid search:
 2. Fuse with RRF (`Σ 1 / (60 + rank)`) or linear (`α * sem + (1-α) * lex` after min-max normalization).
 3. Optionally rerank the fused pool by full-precision cosine.
 
-**Source**: `src/scrydb/search.py`; `docs/05-backend-design.md`.
+**Source**: `src/OneFind/search.py`; `docs/05-backend-design.md`.
 
 ### Q2.4 What is Reciprocal Rank Fusion and why k=60?
 
 **Model answer.** RRF, from Cormack, Clarke, and Büttcher (2009), is `score(d) = Σ_i 1 / (k + rank_i(d))` summed over the rankings being fused. The rank starts at 1; the constant `k` dampens the influence of high ranks. The original paper recommends `k=60` as the default; we adopt that default in ADR-8.
 
-RRF is simple, parameter-light, and surprisingly robust. It does not require score normalization across legs (which is its main advantage over linear fusion), and it is the fusion method used by the original scrydb paper.
+RRF is simple, parameter-light, and surprisingly robust. It does not require score normalization across legs (which is its main advantage over linear fusion), and it is the fusion method used by the original OneFind paper.
 
 **Source**: `docs/02-technical-design.md` ADR-8; Cormack et al. (2009).
 
@@ -168,7 +168,7 @@ The six-doc system is also the project's audit trail. Every major decision has a
 
 Latency, of course, is not deterministic and is reported as a p50/p95 distribution rather than as exact numbers.
 
-**Source**: `tests/test_eval.py`; `src/scrydb/search.py`.
+**Source**: `tests/test_eval.py`; `src/OneFind/search.py`.
 
 ### Q4.2 What happens if I re-index the same documents?
 
@@ -176,7 +176,7 @@ Latency, of course, is not deterministic and is reported as a p50/p95 distributi
 
 This was important to verify because the FTS5 and vec tables need to be re-synced with the relational tables on every re-index, and a subtle bug here would orphan rows.
 
-**Source**: `src/scrydb/store.py` `_flush`; `tests/test_ingest.py::test_reindex_is_idempotent`.
+**Source**: `src/OneFind/store.py` `_flush`; `tests/test_ingest.py::test_reindex_is_idempotent`.
 
 ### Q4.3 What happens if a query contains FTS5 syntax like `AND` or `OR`?
 
@@ -184,7 +184,7 @@ This was important to verify because the FTS5 and vec tables need to be re-synce
 
 This was tested explicitly in `test_hostile_query_syntax_does_not_crash` and `test_cli_no_match_exit_zero` with hostile input.
 
-**Source**: `src/scrydb/search.py::sanitize_fts_query`; `tests/test_search_lexical.py`.
+**Source**: `src/OneFind/search.py::sanitize_fts_query`; `tests/test_search_lexical.py`.
 
 ### Q4.4 How do you handle a very large corpus?
 
@@ -196,7 +196,7 @@ This was tested explicitly in `test_hostile_query_syntax_does_not_crash` and `te
 
 The harness supports Touché (382K) and TREC-COVID (171K) via the BEIR registry, but they are out of V1 scope for evaluation.
 
-**Source**: `src/scrydb/store.py`; `docs/02-technical-design.md` ADR-2.
+**Source**: `src/OneFind/store.py`; `docs/02-technical-design.md` ADR-2.
 
 ### Q4.5 How is the web demo secured?
 
@@ -207,7 +207,7 @@ The harness supports Touché (382K) and TREC-COVID (171K) via the BEIR registry,
 
 There is no file-traversal risk because the index path is fixed at startup. There is no SQL injection risk because all queries use parameterised statements via sqlite3's `?` placeholders.
 
-**Source**: `src/scrydb/serve.py`; `docs/02-technical-design.md` security section.
+**Source**: `src/OneFind/serve.py`; `docs/02-technical-design.md` security section.
 
 ### Q4.6 How would you add a new retrieval mode (e.g., cross-encoder rerank)?
 
@@ -329,7 +329,7 @@ The directional findings (qualitative claims) reproduce faithfully, which is the
 
 ### Q8.1 Show me the FTS5 query and explain it.
 
-**Model answer.** From `src/scrydb/search.py`:
+**Model answer.** From `src/OneFind/search.py`:
 
 ```sql
 SELECT doc_id, title,
@@ -349,9 +349,9 @@ LIMIT ?
 
 **Model answer.** FastAPI dispatches request handlers in a thread pool. The SQLite connection is created in the main thread (during FastAPI's `on_event("startup")`) but is then used in the worker threads that handle requests. Python's sqlite3 module by default refuses cross-thread connection use, so the default `check_same_thread=True` would raise. `check_same_thread=False` is safe for our use case because SQLite has its own locking mechanism that handles concurrent access correctly.
 
-**Source**: `src/scrydb/store.py::Index.open`; `src/scrydb/serve.py`.
+**Source**: `src/OneFind/store.py::Index.open`; `src/OneFind/serve.py`.
 
-### Q8.3 Walk me through what happens when I run `scrydb eval scifact`.
+### Q8.3 Walk me through what happens when I run `OneFind eval scifact`.
 
 **Model answer.** Step by step:
 1. CLI parses arguments, calls `cmd_eval`.
@@ -364,7 +364,7 @@ LIMIT ?
 8. `run_eval` writes a markdown report to `benchmarks/reports/eval-scifact-YYYY-MM-DD.md`.
 9. The CLI prints the report path and exits 0.
 
-**Source**: `src/scrydb/evaluate.py`; `src/scrydb/cli.py`.
+**Source**: `src/OneFind/evaluate.py`; `src/OneFind/cli.py`.
 
 ---
 
@@ -415,7 +415,7 @@ If you have 5 minutes before the defense, scan these:
 | What's the extension finding? | RRF and linear fusion tie on SciFact; RRF wins by 0.002 on NFCorpus. |
 | What's the test count? | 67 tests across 9 modules. |
 | What's the commit count? | 12 commits, linear history, one per task or phase. |
-| What's the demo? | FastAPI + single-page HTML, `scrydb serve --db data/scifact.db --port 8080`. |
+| What's the demo? | FastAPI + single-page HTML, `OneFind serve --db data/scifact.db --port 8080`. |
 | What's the bottleneck? | Query encoding (~80 ms) and NumPy distance computation (~50–100 ms) on CPU. |
 | What would you do next? | Cross-encoder rerank, matryoshka study, scale to Touché. |
 

@@ -1,6 +1,6 @@
 # 04 · UI/UX Brief
 
-Project: scrydb reproduction · Version: v0.1 (draft) · Status: Proposed
+Project: OneFind reproduction · Version: v0.1 (draft) · Status: Proposed
 Scope: two surfaces — CLI output style (primary) and a minimal local demo page (Phase 6).
 
 ## Design direction

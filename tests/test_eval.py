@@ -4,8 +4,8 @@ import json
 
 import pytest
 
-from scrydb.datasets import load_corpus, load_qrels, load_queries
-from scrydb.errors import DataError
+from onefind.datasets import load_corpus, load_qrels, load_queries
+from onefind.errors import DataError
 
 
 # ---- loaders (torch-free) ------------------------------------------------------
@@ -60,8 +60,8 @@ def test_run_eval_writes_report_with_all_configs(none, tmp_path):
     sentence_transformers = pytest.importorskip("sentence_transformers")  # noqa: F841
     del none
 
-    from scrydb.embed import DEFAULT_MODEL, SentenceEmbedder
-    from scrydb.evaluate import CONFIGS, run_eval
+    from onefind.embed import DEFAULT_MODEL, SentenceEmbedder
+    from onefind.evaluate import CONFIGS, run_eval
 
     folder = _make_fixture(
         tmp_path,

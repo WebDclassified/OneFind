@@ -1,25 +1,25 @@
 # 03 · App Flow & State Map
 
-Project: scrydb reproduction · Version: v0.1 (draft) · Status: Proposed
+Project: OneFind reproduction · Version: v0.1 (draft) · Status: Proposed
 Scope note: V1 surface is CLI-first (the paper's artifact is a library). The web demo is Phase 6; its states are specified now so UI work can't redefine behavior later.
 
 ## Screen/command inventory
 
-### SURFACE: CLI  ROUTE: `scrydb <command>`
+### SURFACE: CLI  ROUTE: `OneFind <command>`
 | Command | Purpose | Allowed roles | Key states |
 |---|---|---|---|
-| `scrydb check` | Verify FTS5 + sqlite-vec loadable, print versions | anyone | ok / missing-extension (names fix) |
-| `scrydb index <path>` | Ingest corpus into DB | anyone | progress → done summary; empty-folder error; partial-failure rollback note |
-| `scrydb search "<q>" --mode m --precision p` | Query an index | anyone | results table / no-results / validation error |
-| `scrydb eval --dataset d` | Run harness, write `benchmarks/reports/<name>.md` | anyone | per-config progress bar → report path |
-| `scrydb serve --db x.db` | Launch local demo UI | anyone | URL printed, Ctrl-C clean shutdown |
+| `OneFind check` | Verify FTS5 + sqlite-vec loadable, print versions | anyone | ok / missing-extension (names fix) |
+| `OneFind index <path>` | Ingest corpus into DB | anyone | progress → done summary; empty-folder error; partial-failure rollback note |
+| `OneFind search "<q>" --mode m --precision p` | Query an index | anyone | results table / no-results / validation error |
+| `OneFind eval --dataset d` | Run harness, write `benchmarks/reports/<name>.md` | anyone | per-config progress bar → report path |
+| `OneFind serve --db x.db` | Launch local demo UI | anyone | URL printed, Ctrl-C clean shutdown |
 
 Exit codes: `0` success · `2` usage/validation · `3` environment (missing extension/model) · `4` data error.
 
 ## Journeys
 
 **JOURNEY: First successful search**
-1. `pip install -e .` → 2. `scrydb check` (env validated) → 3. `index ./sample-data` (progress, doc count echoed) → 4. `search "..." --mode hybrid` → 5. ranked table with ids/scores/snippets.
+1. `pip install -e .` → 2. `OneFind check` (env validated) → 3. `index ./sample-data` (progress, doc count echoed) → 4. `search "..." --mode hybrid` → 5. ranked table with ids/scores/snippets.
 Recovery path: step 2 fails → message names exact missing wheel; step 4 empty index → instructs to run index first.
 Testable success: fresh venv to hybrid result ≤15 min including model download.
 

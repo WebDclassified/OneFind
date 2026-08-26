@@ -1,6 +1,6 @@
 # 02 · Technical Design Document
 
-Project: scrydb reproduction · Version: v0.4 (draft) · Status: Proposed
+Project: OneFind reproduction · Version: v0.4 (draft) · Status: Proposed
 
 > v0.2 change: added ADR-7 — application-side int8/binary quantization after an
 > empirical finding about the installed sqlite-vec build.
@@ -16,7 +16,7 @@ CLI / demo page          evaluation harness
       │                        │
       ▼                        ▼
 ┌─────────────────────────────────────┐
-│ scrydb library (Python)             │
+│ OneFind library (Python)             │
 │  ingest → embed → store             │
 │  search: lexical │ semantic │ RRF   │
 └───────────────┬─────────────────────┘
