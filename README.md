@@ -4,24 +4,43 @@ Reproduction of **[SQLite is Enough. Lexical, Semantic, and Hybrid Search with s
 
 > Portfolio project: read literature → implement from scratch → reproduce reported behavior → extend → publish.
 
+## Quickstart (clone → demo in ~5 minutes)
+
+```bash
+git clone <this repo> scrydb
+cd scrydb
+python -m venv .venv
+.venv\Scripts\activate                      # Windows
+# source .venv/bin/activate                  # Linux/macOS
+pip install -e ".[model,eval,serve]"
+
+# 1. prove the environment
+scrydb check --full
+
+# 2. reproduce one BEIR dataset end-to-end (downloads, embeds, evaluates)
+scrydb eval scifact --db data/scifact.db
+scrydb eval nfcorpus --db data/nfcorpus.db
+
+# 3. or try a tiny in-memory demo with the included sample data
+scrydb index ./sample-data --db demo.db --embed
+scrydb serve --db demo.db --port 8080
+# open http://127.0.0.1:8080/
+
+# 4. run the tests
+pytest
+```
+
 ## What this repo contains
 
 | Path | Purpose |
 |---|---|
 | `docs/01-prd.md` … `docs/07-references.md` | Six-document spec system (source of truth, versioned with code) |
-| `src/scrydb/` | The library implementation |
-| `tests/` | pytest suite (unit + integration) |
-| `benchmarks/` | BEIR evaluation harness + generated reports |
-| `demo/` | Thin web demo (later phase) |
-
-## Quickstart
-
-```bash
-pip install -e ".[model]"        # model extra optional until Phase 2
-scrydb check                      # prove FTS5 + sqlite-vec (+ add --full to load the model)
-scrydb index ./sample-data --db demo.db
-scrydb search "chlorophyll" --mode lexical --db demo.db   # hybrid arrives in Phase 3
-```
+| `src/scrydb/` | The library + CLI + FastAPI demo |
+| `tests/` | pytest suite — 67 tests, model- and serve-extras gated |
+| `benchmarks/reports/` | Generated evaluation reports + review notes |
+| `demo/index.html` | Single-page demo UI (vanilla JS, no build step) |
+| `sample-data/` | Four tiny `.md` files for the smoke demo |
+| `data/` | BEIR datasets cache (gitignored, auto-downloaded) |
 
 ## Results (vs paper)
 
@@ -86,4 +105,19 @@ Adds a second hybrid strategy to `hybrid_search` (CLI: `--fusion linear` + `--al
 - [x] Phase 3: Hybrid RRF + rerank (RRF k=60; ablation ≥5/10 curated wins)
 - [x] Phase 4: Reproduce BEIR results — SciFact & NFCorpus reports committed; qualitative paper claims confirmed
 - [x] Phase 5: Review (`benchmarks/reports/review-t09.md`) + alpha-sweep extension on both datasets
-- [ ] Phase 6: Demo UI + publish
+- [x] Phase 6: Demo web app (`scrydb serve`) + publish polish — all PRD success signals met
+
+## What we learned / what surprised us
+
+- **A shipped library can claim capabilities the binary doesn't deliver.** The `sqlite-vec` 0.1.9 wheel *declares* `int8[n]` and `bit[n]` vector columns but rejects every input path we probed. The reproduction's most interesting finding is in `docs/02 ADR-7` — and the application-side quantization path is mathematically equivalent to the paper's configurations.
+- **Hybrid fusion isn't free improvement.** RRF wins by rank-position, not by score magnitude; on NFCorpus the *best* linear fusion loses to default RRF by 0.002 nDCG. Score-similarity between legs is not a free lunch.
+- **A 384-dim embedder reproduces all the paper's directional claims** even though absolute nDCG sits below the paper's 8B baseline. Quality is mostly about the architecture, not the model size.
+- **Six-doc spec + paper-reproduction loop is a self-correcting system.** Every stale-guard test, every "sanity noop" line, every "loading embedding model: None" came out of the run-evidence-assert loop, not from reading the code in isolation. The loop is the methodology.
+
+## Future work (out of V1 scope)
+
+- Cross-encoder reranker on hybrid top-50 (quality vs latency curve)
+- Matryoshka-style dimension reduction for MiniLM
+- Watch-folder live re-index
+- Document-level chunking for application use-cases (BEIR eval stays whole-doc per ADR-4)
+- PyPI package name (upstream already owns `scrydb`; rename for any public release)
