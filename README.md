@@ -2,28 +2,12 @@
 
 Reproduction of **[SQLite is Enough. Lexical, Semantic, and Hybrid Search with scrydb](https://arxiv.org/abs/2608.24060)** (arXiv:2608.24060, cs.IR) — a lightweight hybrid search engine built entirely on SQLite: FTS5 (BM25) + sqlite-vec (embeddings) + Reciprocal Rank Fusion.
 
-> **Major-project final report**: see [`REPORT.md`](REPORT.md) for the academic-style write-up (Abstract → Related Work → Design → Results → Discussion → Future Work → Appendices).
+> **Major-project final report**: see [`FORMAL_PROJECT_REPORT.md`](FORMAL_PROJECT_REPORT.md) for the academic-style write-up (Executive Summary → Related Work → Design → Results → Discussion → Conclusion → Future Work → Appendices).
+>
+> **Step-by-step run guide**: [`HOW_TO_RUN.md`](HOW_TO_RUN.md).
+> **Viva preparation**: [`VIVA_QUESTIONS.md`](VIVA_QUESTIONS.md) and [`TEAM_PREPARATION.md`](TEAM_PREPARATION.md).
 >
 > **Portfolio project**: read literature → implement from scratch → reproduce reported behavior → extend → publish.
-
-## Abstract (excerpt)
-
-We reimplement the scrydb pipeline from the paper, evaluate every
-configuration on two BEIR datasets (SciFact, NFCorpus) using standard
-IR metrics, and conduct one extension experiment (weighted linear
-fusion vs RRF across `α ∈ [0, 1]`). Our MiniLM-L6-v2 (CPU) results
-reproduce the paper's *qualitative* findings — hybrid search beats
-the best single mode, int8 quantization loses essentially nothing
-vs float, binary quantization degrades by ~10% and still dominates
-lexical — while absolute nDCG@10 sits below the paper's 8B-parameter
-baseline as expected from the deliberate model downscaling. We also
-document a substantive finding: the shipped `sqlite-vec` 0.1.9 wheel
-declares `int8[n]` and `bit[n]` vector columns but rejects all
-int8/bit inputs — we recover the paper's int8/binary configurations
-via application-side quantization over the stored float vectors. The
-implementation is packaged as a pip-installable library with a CLI,
-a FastAPI-based localhost demo, a 67-test pytest suite, and four
-published evaluation reports.
 
 ## Quickstart (clone → demo in ~5 minutes)
 
@@ -55,6 +39,11 @@ pytest
 
 | Path | Purpose |
 |---|---|
+| `FORMAL_PROJECT_REPORT.md` | **Full academic report** with Executive Summary, Abstract, References, Appendices |
+| `HOW_TO_RUN.md` | **Step-by-step reproduction guide** from a fresh machine to a working demo |
+| `VIVA_QUESTIONS.md` | **Anticipated defense questions** with model answers (categorized) |
+| `TEAM_PREPARATION.md` | **Full project briefing for the 3 teammates** — story, architecture, demo, Q&A |
+| `REPORT.md` | Earlier, shorter academic-style report |
 | `docs/01-prd.md` … `docs/07-references.md` | Six-document spec system (source of truth, versioned with code) |
 | `src/scrydb/` | The library + CLI + FastAPI demo |
 | `tests/` | pytest suite — 67 tests, model- and serve-extras gated |
@@ -62,6 +51,7 @@ pytest
 | `demo/index.html` | Single-page demo UI (vanilla JS, no build step) |
 | `sample-data/` | Four tiny `.md` files for the smoke demo |
 | `data/` | BEIR datasets cache (gitignored, auto-downloaded) |
+| `screenshots/` | Placeholder for demo screenshots |
 
 ## Results (vs paper)
 
@@ -127,6 +117,7 @@ Adds a second hybrid strategy to `hybrid_search` (CLI: `--fusion linear` + `--al
 - [x] Phase 4: Reproduce BEIR results — SciFact & NFCorpus reports committed; qualitative paper claims confirmed
 - [x] Phase 5: Review (`benchmarks/reports/review-t09.md`) + alpha-sweep extension on both datasets
 - [x] Phase 6: Demo web app (`scrydb serve`) + publish polish — all PRD success signals met
+- [x] Defense prep: `FORMAL_PROJECT_REPORT.md`, `HOW_TO_RUN.md`, `VIVA_QUESTIONS.md`, `TEAM_PREPARATION.md`
 
 ## What we learned / what surprised us
 
