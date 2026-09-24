@@ -7,7 +7,7 @@ pytest.importorskip("ranx")
 st = pytest.importorskip("sentence_transformers")  # noqa: F841
 
 from onefind.embed import DEFAULT_MODEL, SentenceEmbedder  # noqa: E402
-from onefind.errors import UsageError  # noqa: E402
+from onefind.errors import DataError, UsageError  # noqa: E402
 from onefind.evaluate import run_alpha_sweep  # noqa: E402
 from onefind.search import (  # noqa: E402
     Hit,
@@ -26,14 +26,15 @@ def _h(doc_id: str, score: float) -> Hit:
     return Hit(doc_id=doc_id, title="", score=score, snippet="")
 
 
-def test_linear_fuse_extremes_match_underlying_rankings():
+def test_linear_fuse_extremes_are_exact_passthroughs():
     lex = [_h("a", 0.9), _h("b", 0.5)]
     sem = [_h("c", 0.99), _h("a", 0.40)]
-    # candidates are the union; ranking is what changes with alpha
     fused = linear_fuse(lex, sem, alpha=0.0)
-    assert [d for d, _ in fused] == ["a", "b", "c"]
+    assert [d for d, _ in fused] == ["a", "b"]
+    assert dict(fused) == {"a": 0.9, "b": 0.5}
     fused = linear_fuse(lex, sem, alpha=1.0)
-    assert [d for d, _ in fused] == ["c", "a", "b"]
+    assert [d for d, _ in fused] == ["c", "a"]
+    assert dict(fused) == {"c": 0.99, "a": 0.40}
 
 
 def test_linear_fuse_min_max_normalization_inside_pool():
@@ -137,6 +138,24 @@ def test_sweep_writes_report_and_picks_best_alpha(embedded_db, embedder, tmp_pat
         encoding="utf-8",
     )
 
+    from onefind.datasets import dataset_fingerprint
+    from onefind.evaluate import _id_digest
+
+    with Index.open(embedded_db) as index:
+        index.set_meta(
+            "eval_manifest",
+            json.dumps(
+                {
+                    "source": str(folder),
+                    "dataset_files": dataset_fingerprint(folder),
+                    "document_ids": _id_digest(
+                        {"d0", "d1", "d2", "d3"}
+                    ),
+                },
+                sort_keys=True,
+            ),
+        )
+
     report = run_alpha_sweep(
         str(folder),
         db=embedded_db,
@@ -149,3 +168,25 @@ def test_sweep_writes_report_and_picks_best_alpha(embedded_db, embedder, tmp_pat
     assert "linear(α=0.0)" in text and "linear(α=1.0)" in text
     assert "RRF baseline" in text
     assert "Best alpha" in text
+
+
+def test_sweep_rejects_wrong_manifest_before_model_load(tmp_path):
+    folder = tmp_path / "fixture"
+    folder.mkdir()
+    (folder / "corpus.jsonl").write_text(
+        '{"_id":"d0","title":"One","text":"alpha"}\n', encoding="utf-8"
+    )
+    (folder / "queries.jsonl").write_text(
+        '{"_id":"q1","text":"alpha"}\n', encoding="utf-8"
+    )
+    (folder / "qrels.tsv").write_text(
+        "query-id\tcorpus-id\tscore\nq1\td0\t1\n", encoding="utf-8"
+    )
+    db = tmp_path / "wrong-manifest.db"
+    with Index.open(db) as index:
+        from onefind.store import Document
+        index.add_documents([Document("d0", "One", "alpha")])
+        index.set_meta("eval_manifest", json.dumps({"source": "different-source"}))
+
+    with pytest.raises(DataError, match="built for source"):
+        run_alpha_sweep(str(folder), db=db, alphas=[0.5])

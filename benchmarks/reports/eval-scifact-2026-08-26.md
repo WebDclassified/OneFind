@@ -1,5 +1,7 @@
 # Evaluation — scifact
 
+> **Superseded (2026-08-26 run).** The v1.0 lexical ordering and rerank-score defects make these historical numbers unsuitable for current claims. Use the corrected 2026-09-24 report.
+
 - Date: 2026-08-26
 - Model: `sentence-transformers/all-MiniLM-L6-v2` · docs: 5183 · judged queries: 300 · k: 10
 - DB: `data/scifact.db` (5183 vectors)

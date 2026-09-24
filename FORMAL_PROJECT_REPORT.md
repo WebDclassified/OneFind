@@ -1,5 +1,7 @@
 # Formal Project Report
 
+> **Corrected v1.1 evidence notice (2026-09-24).** The original prototype reversed BM25 ordering and reranking retained stale fusion scores. Those defects invalidate the historical lexical/hybrid/rerank tables below. The v1.1 implementation corrects both, uses native sqlite-vec float KNN and a true rerank candidate pool, adds atomic manifest-bound evaluation, and has 112 tests. Use the new dated reports and `README.md` for current claims; the remaining historical text is retained to document the original study and review process.
+
 ## **OneFind: A Reproduction, Empirical Study, and Toolchain Finding of Single-File Hybrid Information Retrieval**
 
 > **Author**: Major Project, Engineering Degree
@@ -7,7 +9,7 @@
 > **Subject Paper**: *SQLite is Enough* (arXiv:2608.24060, cs.IR) — the source of the reproduced architecture
 > **Product Name**: OneFind
 > **Source Repository**: this directory
-> **Status**: v1.0 (final)
+> **Status**: v1.1 corrected implementation; historical v1.0 evidence clearly marked
 
 ---
 
@@ -52,6 +54,29 @@ I thank the authors of the original OneFind paper for their clear, reproducible 
 9. [Future Scope](#chapter-9-future-scope)
 10. [References](#references)
 11. [Appendices](#appendices)
+
+---
+
+## Corrected v1.1 results
+
+The corrected 2026-09-24 runs supersede the historical v1.0 tables later in this document.
+
+| Configuration | SciFact nDCG@10 | NFCorpus nDCG@10 |
+|---|---:|---:|
+| Lexical BM25 | 0.0467 | 0.2073 |
+| Semantic float | 0.6451 | 0.3167 |
+| Semantic int8 | 0.6465 | 0.3160 |
+| Semantic binary | 0.5827 | 0.2761 |
+| Hybrid float RRF | **0.6568** | **0.3466** |
+| Hybrid int8 RRF | **0.6582** | 0.3465 |
+| Hybrid binary RRF | 0.5959 | 0.3169 |
+| Hybrid float + cosine rerank | 0.6451 | 0.3167 |
+
+Hybrid improves over the best single mode on both datasets. Int8 remains close in quality, while binary degrades. The exact bounded quantized scans are slower than native float KNN, so no quantized speed advantage is claimed. Pure-cosine reranking hurts the corrected runs and remains optional.
+
+The corrected alpha sweep is effectively tied: linear α=0.1 scores 0.6572 versus RRF 0.6568 on SciFact, and linear α=0.2 scores 0.3470 versus RRF 0.3466 on NFCorpus. These are single-run differences of 0.0004, so RRF remains the simpler default.
+
+Current evidence: `benchmarks/reports/eval-scifact-2026-09-24.md`, `benchmarks/reports/eval-nfcorpus-2026-09-24.md`, and the two 2026-09-24 alpha sweeps.
 
 ---
 
@@ -164,9 +189,9 @@ The sweep sweeps `α ∈ {0, 0.1, …, 1.0}` and reports nDCG@10 per value, then
 
 The system has three runtime layers:
 
-1. **Library layer** (`src/OneFind/`): pure-Python modules for ingest, embedding, storage, search, evaluation, and serving. No runtime external dependencies beyond Python standard library, NumPy, and the optional `[model]`, `[eval]`, `[serve]` extras.
-2. **CLI layer** (`src/OneFind/cli.py`): argparse-based subcommand dispatch with central error handling that maps typed exceptions to documented exit codes.
-3. **Demo layer** (`src/OneFind/serve.py` + `demo/index.html`): a FastAPI backend with three JSON endpoints plus a static single-page HTML application that implements every UI state specified in the design brief.
+1. **Library layer** (`src/onefind/`): pure-Python modules for ingest, embedding, storage, search, evaluation, and serving. No runtime external dependencies beyond Python standard library, NumPy, and the optional `[model]`, `[eval]`, `[serve]` extras.
+2. **CLI layer** (`src/onefind/cli.py`): argparse-based subcommand dispatch with central error handling that maps typed exceptions to documented exit codes.
+3. **Demo layer** (`src/onefind/serve.py` + `demo/index.html`): a FastAPI backend with three JSON endpoints plus a static single-page HTML application that implements every UI state specified in the design brief.
 
 ```
 CLI / demo page          evaluation harness
@@ -240,13 +265,13 @@ with Index.open("x.db") as idx:
 The CLI mirrors the library API:
 
 ```
-OneFind check [--full] [--json]
+onefind check [--full] [--json]
 OneFind index <path> [--db X] [--embed] [--model NAME]
 OneFind search "Q" [--db X] [--mode {lexical,semantic,hybrid}] [--precision {float,int8,binary}]
                 [--k N] [--rrf-k K] [--rerank] [--fusion {rrf,linear}] [--alpha A]
-OneFind eval <dataset> [--db X] [--k N] [--max-docs N] [--limit-queries N]
+onefind eval <dataset> [--db X] [--k N] [--max-docs N] [--limit-queries N]
 OneFind sweep-alpha <dataset> --db X [--alphas LIST] [--k N] [--precision P]
-OneFind serve --db X [--host H] [--port P]
+onefind serve --db X [--host H] [--port P]
 ```
 
 ### 4.4 Architectural Decision Records
@@ -294,7 +319,7 @@ The project was implemented in seven phases, each producing one or two commits. 
 
 **Phase 5 — Review and Extension (T-09, T-10)**: Self review pass documented in `benchmarks/reports/review-t09.md`; weighted linear-fusion extension added to `hybrid_search` (`--fusion linear --alpha 0.5`); new `sweep-alpha` subcommand; real alpha sweeps on both BEIR datasets. 61/61 tests passing. Commit: `14fe5e0`.
 
-**Phase 6 — Demo and Publish (T-11, T-12)**: FastAPI-based localhost web application with three JSON endpoints; single-page HTML/CSS/JS UI implementing all six design states; `OneFind serve` subcommand; final README and report polish. 67/67 tests passing. Commits: `5b7ecba`, `a90fdc4`, `f70e58c`.
+**Phase 6 — Demo and Publish (T-11, T-12)**: FastAPI-based localhost web application with three JSON endpoints; single-page HTML/CSS/JS UI implementing all six design states; `onefind serve` subcommand; final README and report polish. 67/67 tests passing. Commits: `5b7ecba`, `a90fdc4`, `f70e58c`.
 
 ### 5.3 Testing Strategy
 
@@ -550,12 +575,12 @@ python -m venv .venv
 .venv\Scripts\activate          # Windows
 # source .venv/bin/activate     # Linux/macOS
 pip install -e ".[model,eval,serve]"
-OneFind check --full
-OneFind eval scifact --db data/scifact.db
-OneFind eval nfcorpus --db data/nfcorpus.db
+onefind check --full
+onefind eval scifact --db data/scifact.db
+onefind eval nfcorpus --db data/nfcorpus.db
 OneFind sweep-alpha scifact --db data/scifact.db
 OneFind sweep-alpha nfcorpus --db data/nfcorpus.db
-OneFind serve --db data/scifact.db --port 8080
+onefind serve --db data/scifact.db --port 8080
 pytest
 ```
 
@@ -572,7 +597,7 @@ A more detailed step-by-step guide is in `HOW_TO_RUN.md`.
 | `REPORT.md` | Earlier, shorter academic-style report |
 | `README.md` | GitHub-style overview and quickstart |
 | `docs/01-prd.md` … `docs/07-references.md` | Living specification (source of truth) |
-| `src/OneFind/` | Library, CLI, evaluation harness, FastAPI demo |
+| `src/onefind/` | Library, CLI, evaluation harness, FastAPI demo |
 | `tests/` | pytest suite — 67 tests |
 | `benchmarks/reports/` | Generated evaluation reports + review notes |
 | `demo/index.html` | Single-page demo UI (no build step) |

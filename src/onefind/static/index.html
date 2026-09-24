@@ -1,0 +1,215 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="color-scheme" content="light dark">
+  <meta name="theme-color" content="#f7f8fc">
+  <title>OneFind · Local hybrid search</title>
+  <link rel="icon" href="/assets/favicon.svg" type="image/svg+xml">
+  <link rel="stylesheet" href="/assets/styles.css">
+  <script src="/assets/app.js" defer></script>
+</head>
+<body>
+  <a class="skip-link" href="#search-input">Skip to search</a>
+
+  <header class="site-header">
+    <div class="header-inner">
+      <a class="brand" href="/" aria-label="OneFind home">
+        <span class="brand-mark" aria-hidden="true">
+          <svg viewBox="0 0 32 32" role="img">
+            <path d="M14.8 3.5a11.3 11.3 0 1 0 7.9 19.2l5.1 5.1 2.3-2.3-5.1-5.1A11.3 11.3 0 0 0 14.8 3.5Zm0 2.6a8.7 8.7 0 1 1 0 17.4 8.7 8.7 0 0 1 0-17.4Z"/>
+            <circle cx="12.2" cy="12.2" r="2.1"/>
+            <circle cx="17.4" cy="17.4" r="2.1"/>
+            <path d="m13.5 13.5 2.6 2.6" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/>
+          </svg>
+        </span>
+        <span>
+          <strong>OneFind</strong>
+          <small>Local hybrid search</small>
+        </span>
+      </a>
+
+      <div class="header-actions">
+        <span class="privacy-badge" title="Queries stay on this machine">
+          <svg viewBox="0 0 20 20" aria-hidden="true"><path d="M10 1.7 16 4v4.6c0 4-2.5 7.6-6 9.7-3.5-2.1-6-5.7-6-9.7V4l6-2.3Zm0 3L6.2 6.2v2.4c0 2.7 1.5 5.2 3.8 6.8 2.3-1.6 3.8-4.1 3.8-6.8V6.2L10 4.7Z"/></svg>
+          On-device
+        </span>
+        <span class="service-pill" id="service-status" role="status">
+          <span class="status-dot" aria-hidden="true"></span>
+          Connecting
+        </span>
+      </div>
+    </div>
+  </header>
+
+  <main class="page-shell">
+    <section class="hero" aria-labelledby="page-title">
+      <p class="eyebrow">Private retrieval workspace</p>
+      <h1 id="page-title">Find the right document, not just the right words.</h1>
+      <p class="hero-copy">Search a local SQLite index with keyword matching, semantic similarity, or a blend of both.</p>
+      <div class="index-facts" aria-label="Index status">
+        <span><strong id="document-count">—</strong> documents</span>
+        <span><strong id="vector-count">—</strong> vectors</span>
+        <span><strong id="index-size">—</strong> on disk</span>
+      </div>
+    </section>
+
+    <section class="search-panel" aria-labelledby="search-heading">
+      <div class="panel-heading">
+        <div>
+          <p class="section-kicker">Search</p>
+          <h2 id="search-heading">Ask the local index</h2>
+        </div>
+        <span class="shortcut-hint" aria-hidden="true"><kbd>/</kbd> to focus</span>
+      </div>
+
+      <form id="search-form" novalidate>
+        <label class="sr-only" for="search-input">Search query</label>
+        <div class="search-row">
+          <div class="input-wrap">
+            <svg class="input-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="m20.6 19.1-4.2-4.2a7.5 7.5 0 1 0-1.5 1.5l4.2 4.2 1.5-1.5ZM5 10.5a5.5 5.5 0 1 1 11 0 5.5 5.5 0 0 1-11 0Z"/></svg>
+            <input id="search-input" name="query" type="search" maxlength="512"
+              autocomplete="off" spellcheck="true"
+              placeholder="Try a question, phrase, or keyword…"
+              aria-describedby="query-help">
+            <button class="clear-button" id="clear-button" type="button" aria-label="Clear search" hidden>
+              <svg viewBox="0 0 20 20" aria-hidden="true"><path d="m5.7 4.3 4.3 4.3 4.3-4.3 1.4 1.4-4.3 4.3 4.3 4.3-1.4 1.4-4.3-4.3-4.3 4.3-1.4-1.4 4.3-4.3-4.3-4.3 1.4-1.4Z"/></svg>
+            </button>
+          </div>
+          <button class="search-button" id="search-button" type="submit">
+            <span>Search</span>
+            <svg viewBox="0 0 20 20" aria-hidden="true"><path d="m11.3 3.3 6 6-6 6-1.4-1.4 3.6-3.6H2.5V8.7h10.9l-3.5-3.9 1.4-1.5Z"/></svg>
+          </button>
+        </div>
+        <p class="field-help" id="query-help">Up to 512 characters. Your query is sent only to the local service.</p>
+
+        <div class="options-grid">
+          <fieldset class="option-group">
+            <legend>Retrieval mode</legend>
+            <div class="segmented-control">
+              <label>
+                <input type="radio" name="mode" value="lexical" checked>
+                <span><strong>Keyword</strong><small>Exact terms &amp; BM25</small></span>
+              </label>
+              <label>
+                <input type="radio" name="mode" value="semantic">
+                <span><strong>Semantic</strong><small>Meaning &amp; similarity</small></span>
+              </label>
+              <label>
+                <input type="radio" name="mode" value="hybrid">
+                <span><strong>Hybrid</strong><small>Best of both</small></span>
+              </label>
+            </div>
+          </fieldset>
+
+          <fieldset class="option-group precision-group" id="precision-group" hidden>
+            <legend>Vector precision</legend>
+            <div class="segmented-control compact">
+              <label title="Full 32-bit float vectors">
+                <input type="radio" name="precision" value="float" checked>
+                <span><strong>Float</strong><small>Highest fidelity</small></span>
+              </label>
+              <label title="8-bit quantized cosine search">
+                <input type="radio" name="precision" value="int8">
+                <span><strong>Int8</strong><small>Compact precision</small></span>
+              </label>
+              <label title="One-bit sign vectors and Hamming distance">
+                <input type="radio" name="precision" value="binary">
+                <span><strong>Binary</strong><small>Smallest vectors</small></span>
+              </label>
+            </div>
+          </fieldset>
+
+          <label class="result-count-control" for="result-count">
+            <span>Results</span>
+            <select id="result-count" name="k">
+              <option value="5">5</option>
+              <option value="10" selected>10</option>
+              <option value="20">20</option>
+              <option value="30">30</option>
+            </select>
+          </label>
+        </div>
+
+        <div class="mode-explainer" id="mode-explainer">
+          Keyword mode ranks exact lexical matches and is ideal for names, codes, and precise phrases.
+        </div>
+
+        <div class="examples" id="examples" aria-label="Example searches">
+          <span>Try an example</span>
+          <div class="example-list">
+            <button type="button" data-query="how plants turn sunlight into food">Plant biology</button>
+            <button type="button" data-query="emergency fund after unexpected expenses">Personal finance</button>
+            <button type="button" data-query="vector embeddings for meaning-based search">Machine learning</button>
+            <button type="button" data-query="compost ingredients and nutrient balance">Composting</button>
+          </div>
+        </div>
+      </form>
+    </section>
+
+    <section class="results-section" id="results-section" aria-labelledby="results-heading" aria-busy="false">
+      <div class="results-heading-row">
+        <div>
+          <p class="section-kicker">Results</p>
+          <h2 id="results-heading">Search results</h2>
+        </div>
+        <p class="results-summary" id="results-summary">Enter a query to begin.</p>
+      </div>
+      <p class="sr-only" id="live-status" aria-live="polite" aria-atomic="true"></p>
+
+      <div class="state-card idle-state" id="idle-state">
+        <span class="state-icon" aria-hidden="true">
+          <svg viewBox="0 0 32 32"><path d="M14.3 4a10.3 10.3 0 1 0 7.2 17.5l5.4 5.4 2.1-2.1-5.4-5.4A10.3 10.3 0 0 0 14.3 4Zm0 2.6a7.7 7.7 0 1 1 0 15.4 7.7 7.7 0 0 1 0-15.4Z"/></svg>
+        </span>
+        <h3>Search your local knowledge base</h3>
+        <p>Results stay on this machine. Choose a mode above or start with an example.</p>
+      </div>
+
+      <div class="state-card loading-state" id="loading-state" hidden>
+        <div class="loading-copy">
+          <span class="spinner" aria-hidden="true"></span>
+          <div><h3 id="loading-title">Searching…</h3><p id="loading-copy">Ranking local documents.</p></div>
+        </div>
+        <div class="skeleton-list" aria-hidden="true">
+          <div class="skeleton-card"><span></span><div><i></i><i></i><i></i></div></div>
+          <div class="skeleton-card"><span></span><div><i></i><i></i><i></i></div></div>
+          <div class="skeleton-card"><span></span><div><i></i><i></i><i></i></div></div>
+        </div>
+      </div>
+
+      <div class="state-card no-index-state" id="no-index-state" hidden>
+        <span class="state-icon warning" aria-hidden="true">!</span>
+        <h3>No index is loaded</h3>
+        <p>Create a free local index, then restart the service:</p>
+        <code>onefind index ./sample-data --db demo.db --embed</code>
+        <code>onefind serve --db demo.db</code>
+      </div>
+
+      <div class="state-card empty-state" id="empty-state" hidden>
+        <span class="state-icon" aria-hidden="true">0</span>
+        <h3>No matching documents</h3>
+        <p id="empty-copy">Try fewer words, a related phrase, or another retrieval mode.</p>
+      </div>
+
+      <div class="state-card error-state" id="error-state" hidden>
+        <span class="state-icon error" aria-hidden="true">!</span>
+        <h3>Search could not finish</h3>
+        <p id="error-message">The local search service returned an error.</p>
+        <button class="secondary-button" id="retry-button" type="button">Try again</button>
+      </div>
+
+      <ol class="results-list" id="results-list" hidden></ol>
+    </section>
+  </main>
+
+  <footer class="site-footer">
+    <p><strong>OneFind</strong> keeps lexical and semantic retrieval in one local SQLite file.</p>
+    <p>No cloud search · No tracking · Free to run</p>
+  </footer>
+
+  <noscript>
+    <div class="noscript-message">This demo needs JavaScript for local search requests.</div>
+  </noscript>
+</body>
+</html>

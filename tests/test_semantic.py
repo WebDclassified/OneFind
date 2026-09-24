@@ -32,7 +32,7 @@ def embedded_db(embedder, tmp_path_factory):
 def test_float_vectors_written_and_quant_calibration_present(embedded_db):
     # ADR-7: single native float table; int8/binary computed app-side
     with Index.open(embedded_db) as idx:
-        assert idx.count("vectors") == 4
+        assert idx.count("vectors") == 20
         assert idx.get_meta("int8_scale") is not None
         assert idx.get_meta("model_dim") == "384"
 
@@ -46,7 +46,7 @@ def test_paraphrase_query_finds_doc_without_keyword_overlap(embedded_db, embedde
     with Index.open(embedded_db) as idx:
         idx.attach_embedder(embedder)
         hits = semantic_search(idx, "how plants turn sunlight into food", k=4)
-    assert "photosynthesis" in _ids(hits)[:3]
+    assert "photosynthesis.md" in _ids(hits)[:3]
 
 
 @pytest.mark.parametrize("precision", ["float", "int8", "binary"])
@@ -55,7 +55,7 @@ def test_all_precisions_return_rankings(embedded_db, embedder, precision):
         idx.attach_embedder(embedder)
         hits = semantic_search(idx, "bread starter", k=4, precision=precision)
     assert len(hits) == 4
-    assert "sourdough" in _ids(hits)[:2]
+    assert "sourdough.md" in _ids(hits)[:2]
 
 
 def test_precisions_overlap_but_may_differ(embedded_db, embedder):

@@ -1,43 +1,110 @@
-# 03 · App Flow & State Map
+# 03 · Application Flow and State Map
 
-Project: OneFind reproduction · Version: v0.1 (draft) · Status: Proposed
-Scope note: V1 surface is CLI-first (the paper's artifact is a library). The web demo is Phase 6; its states are specified now so UI work can't redefine behavior later.
+Project: OneFind · Version: 1.1 · Status: Implemented
 
-## Screen/command inventory
+## Command surface
 
-### SURFACE: CLI  ROUTE: `OneFind <command>`
-| Command | Purpose | Allowed roles | Key states |
-|---|---|---|---|
-| `OneFind check` | Verify FTS5 + sqlite-vec loadable, print versions | anyone | ok / missing-extension (names fix) |
-| `OneFind index <path>` | Ingest corpus into DB | anyone | progress → done summary; empty-folder error; partial-failure rollback note |
-| `OneFind search "<q>" --mode m --precision p` | Query an index | anyone | results table / no-results / validation error |
-| `OneFind eval --dataset d` | Run harness, write `benchmarks/reports/<name>.md` | anyone | per-config progress bar → report path |
-| `OneFind serve --db x.db` | Launch local demo UI | anyone | URL printed, Ctrl-C clean shutdown |
+| Command | Success | Purpose |
+|---|---:|---|
+| `onefind check [--full] [--json]` | 0/3 | Verify engine and optional model |
+| `onefind index PATH --db DB [--embed]` | 0/2/3/4 | Build or refresh an index |
+| `onefind search QUERY --mode MODE` | 0/2/3/4 | Query an existing index |
+| `onefind eval DATASET --db DB` | 0/2/4 | Build and evaluate a dataset |
+| `onefind sweep-alpha DATASET --db DB` | 0/2/4 | Run the fusion extension |
+| `onefind smoke --db DB` | 0/2/4 | Evaluate JSONL gold cases |
+| `onefind serve --db DB` | server | Start the local web app |
 
-Exit codes: `0` success · `2` usage/validation · `3` environment (missing extension/model) · `4` data error.
+Exit codes: `0` success, `2` usage/validation, `3` environment/model, `4` data/corpus.
 
-## Journeys
+## Primary journeys
 
-**JOURNEY: First successful search**
-1. `pip install -e .` → 2. `OneFind check` (env validated) → 3. `index ./sample-data` (progress, doc count echoed) → 4. `search "..." --mode hybrid` → 5. ranked table with ids/scores/snippets.
-Recovery path: step 2 fails → message names exact missing wheel; step 4 empty index → instructs to run index first.
-Testable success: fresh venv to hybrid result ≤15 min including model download.
+### Build a local index
 
-**JOURNEY: Reproduce evaluation**
-1. `eval --dataset scifact` → 2. dataset cached under `data/` (reuses if present) → 3. configurations run sequentially with live config label → 4. report written + path echoed → 5. numbers pasted into README table by author.
-Permission edge case: n/a (local tool). Testable success: rerunning produces byte-identical effectiveness numbers given pinned model/seeds.
+1. Validate runtime with `onefind check`.
+2. Choose a folder, text file, or JSONL corpus.
+3. Add `--embed` for semantic/hybrid retrieval.
+4. Receive processed/total counts and storage model.
+5. Re-run safely; file IDs and vector rows are upserted consistently.
 
-**JOURNEY: Demo page (Phase 6)** — SCREEN `/`
-Purpose: interactive proof the engine works. Entry conditions: DB loaded, else empty-state card offering `index` instructions.
-Actions: submit query; toggle mode lexical/semantic/hybrid; adjust k.
-States: **empty-index**, **loading**, **results** (rank list: title, score, highlighted snippet), **no-results**, **error** (engine exception banner), each defined below:
+Recovery: a failed batch rolls back. A lexical update to an embedded index is refused rather than leaving stale vectors.
 
-| State | Trigger | Display |
+### Search
+
+1. Enter a nonblank query of at most 512 characters.
+2. Choose keyword, semantic, or hybrid mode.
+3. For semantic/hybrid, choose float, int8, or binary when supported.
+4. Choose 5–30 UI results (CLI/API permit 1–50).
+5. Receive ranked results with title, ID/source, safe snippet, score metric, and latency.
+
+Recovery: empty query returns to idle; unsupported capabilities are disabled; service errors show a retry action.
+
+### Evaluate
+
+1. Acquire or load a local dataset.
+2. Build into an isolated staging database.
+3. Load the model and index selected documents.
+4. Run every configuration and write a report.
+5. Atomically publish the database and manifest.
+
+Recovery: model, indexing, or metric failure leaves the existing target untouched and removes staging files.
+
+### Use the web demo
+
+1. Start `onefind serve --db DB`.
+2. Fetch `/api/stats` to learn readiness and capabilities.
+3. Disable unsupported modes/precisions in the UI.
+4. Submit `/api/search` only after an explicit Search action.
+5. Render response content through text nodes and structured highlight segments.
+6. Cancel stale requests and replace them with the latest result.
+
+## UI state machine
+
+| State | Trigger | Display and controls |
 |---|---|---|
-| Empty index | 0 docs | CTA card with copy-paste index command |
-| Loading | request in flight | disabled input + spinner ≤300 ms then skeleton rows |
-| No results | 0 hits | "Nothing matched — try another mode" suggestion row |
-| Error | 5xx/exception | red banner, retry button, error id |
+| Connecting | App boot | Header status; controls disabled until stats load |
+| Idle | Ready index, no active query | Search guidance and examples |
+| Loading | Explicit submit | Disabled input, truthful model/search copy, skeletons |
+| Results | Nonempty result list | Summary, timing, ordered result articles |
+| Empty | Zero hits | Mode-specific recovery suggestions |
+| No index | `ready=false` | Disabled search and local build instructions |
+| Unavailable mode | No vectors/calibration | Capability-aware disabled controls |
+| Error | Network/API/validation failure | Calm message and Retry |
 
-Redirects/back: none beyond browser default; destructive confirm required for "reset index" button (Phase 6 optional).
-Mobile: single column, toggle wraps. Analytics events: none (local tool).
+The complete result list is not placed inside `aria-live`; a concise status region announces result count, loading, empty, and error transitions.
+
+## API contracts
+
+### `GET /api/stats`
+
+Returns readiness, document/vector counts, database size, model/dimension, health, supported modes, and supported precisions. It does not expose the absolute index path.
+
+### `POST /api/search`
+
+```json
+{
+  "query": "nonblank text",
+  "mode": "lexical | semantic | hybrid",
+  "precision": "float | int8 | binary",
+  "k": 10
+}
+```
+
+The response contains `results` plus `meta` with count, mode, precision, total latency, and model-load latency. Errors use:
+
+```json
+{
+  "error": {
+    "code": "stable_machine_code",
+    "message": "human-readable message",
+    "retryable": false
+  }
+}
+```
+
+### `POST /api/reset`
+
+Disabled by default. When explicitly enabled, a valid startup token is required. Search and reset transitions are serialized by a process lock.
+
+## Redirects and persistence
+
+There are no route redirects. The index is a local file. Search is naturally idempotent; writes use explicit transactions. The web application performs no analytics or background indexing.

@@ -1,9 +1,9 @@
 # 07 · References
 
-Project: OneFind reproduction · Version: v0.1 · Curated sources behind the plan.
+Project: OneFind · Version: 1.1 · Curated sources behind the implementation.
 
 ## The paper being reproduced
-- OneFind paper: https://arxiv.org/abs/2608.24060 — *"SQLite is Enough. Lexical, Semantic, and Hybrid Search with OneFind"* (cs.IR, MIT-licensed library; upstream repo linked from the paper — capture exact URL in Phase 0)
+- Source paper: https://arxiv.org/abs/2608.24060 — *"SQLite is Enough: Lexical, Semantic, and Hybrid Search with scrydb"* (cs.IR; MIT-licensed reference implementation)
 - Upstream API used as behavioral reference only (we reimplement, ADR-1).
 
 ## Methods & building blocks

@@ -10,6 +10,8 @@ dist/
 
 # generated data (models cache under user dir; corpora re-downloadable)
 *.db
+*.db-wal
+*.db-shm
 data/
 
 # OS noise

@@ -1,5 +1,7 @@
 # Alpha sweep — scifact (float precision)
 
+> **Superseded (2026-08-26 run).** The v1.0 lexical ordering defect affected candidate retrieval. Use the corrected 2026-09-24 sweep.
+
 - Date: 2026-08-26
 - Model: `sentence-transformers/all-MiniLM-L6-v2` · judged queries: 300 · k: 10
 - Linear fusion min-max-normalizes each leg's scores to [0, 1] within the

@@ -4,27 +4,36 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "onefind"
-version = "0.1.0"
+version = "1.1.0"
 description = "Lexical, semantic, and hybrid search in a single SQLite file - reproduction of arXiv:2608.24060 (scrydb)"
 readme = "README.md"
 requires-python = ">=3.11"
-license = { text = "MIT" }
+license = { file = "LICENSE" }
 authors = [{ name = "Major Project" }]
+keywords = ["information-retrieval", "sqlite", "bm25", "embeddings", "hybrid-search"]
 dependencies = [
-    "sqlite-vec>=0.1.6",
+    "sqlite-vec>=0.1.6,<0.2",
 ]
 
 [project.optional-dependencies]
-model = ["sentence-transformers>=3.0"]
-eval = ["ranx>=0.3", "pyarrow>=14"]
-serve = ["fastapi>=0.110", "uvicorn[standard]>=0.27"]
-dev = ["pytest>=8", "httpx>=0.27"]
+model = ["sentence-transformers>=3.0,<7", "numpy>=1.26,<3"]
+eval = ["ranx>=0.3,<1", "pyarrow>=14,<26", "numpy>=1.26,<3"]
+serve = ["fastapi>=0.110,<1", "pydantic>=2,<3", "uvicorn[standard]>=0.27,<1"]
+dev = ["pytest>=8,<10", "httpx>=0.27,<1", "numpy>=1.26,<3"]
+browser = ["playwright>=1.50,<2"]
 
 [project.scripts]
 onefind = "onefind.cli:main"
 
+[project.urls]
+Repository = "https://github.com/WebDclassified/OneFind"
+Issues = "https://github.com/WebDclassified/OneFind/issues"
+
 [tool.setuptools.packages.find]
 where = ["src"]
+
+[tool.setuptools.package-data]
+onefind = ["static/*"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

@@ -1,213 +1,22 @@
 <!doctype html>
 <html lang="en">
 <head>
-<meta charset="utf-8" />
-<meta name="viewport" content="width=device-width, initial-scale=1" />
-<title>OneFind demo</title>
-<style>
-  :root {
-    --surface: #ffffff;
-    --surface-2: #f6f7f9;
-    --text: #111827;
-    --text-2: #6b7280;
-    --primary: #4f46e5;
-    --primary-on: #ffffff;
-    --danger: #dc2626;
-    --border: #e5e7eb;
-    --radius: 12px;
-    --radius-sm: 8px;
-  }
-  * { box-sizing: border-box; }
-  html, body { margin: 0; padding: 0; background: var(--surface-2); color: var(--text);
-    font: 15px/1.5 system-ui, -apple-system, "Segoe UI", sans-serif; }
-  header { background: var(--surface); border-bottom: 1px solid var(--border);
-    padding: 12px 24px; display: flex; gap: 12px; align-items: center; }
-  header h1 { font-size: 17px; font-weight: 600; margin: 0; }
-  header .stats { color: var(--text-2); font-size: 13px; margin-left: auto;
-    font-family: ui-monospace, Menlo, monospace; }
-  main { max-width: 760px; margin: 24px auto; padding: 0 16px; }
-  .search-card { background: var(--surface); border: 1px solid var(--border);
-    border-radius: var(--radius); padding: 16px; }
-  .search-row { display: flex; gap: 8px; }
-  input[type=search] { flex: 1; font: inherit; padding: 10px 12px;
-    border: 1px solid var(--border); border-radius: var(--radius-sm); color: var(--text);
-    background: var(--surface); }
-  input[type=search]:focus { outline: 2px solid var(--primary); outline-offset: 1px;
-    border-color: var(--primary); }
-  .controls { margin-top: 12px; display: flex; gap: 12px; flex-wrap: wrap; align-items: center; }
-  .segmented { display: inline-flex; border: 1px solid var(--border);
-    border-radius: var(--radius-sm); overflow: hidden; background: var(--surface-2); }
-  .segmented button { background: transparent; border: 0; padding: 6px 12px;
-    font: inherit; cursor: pointer; color: var(--text); }
-  .segmented button[aria-pressed="true"] { background: var(--primary);
-    color: var(--primary-on); }
-  .segmented button:focus-visible { outline: 2px solid var(--primary);
-    outline-offset: 1px; }
-  .results { margin-top: 20px; display: flex; flex-direction: column; gap: 10px; }
-  .hit { background: var(--surface); border: 1px solid var(--border);
-    border-radius: var(--radius); padding: 12px 16px; }
-  .hit .head { display: flex; gap: 8px; align-items: baseline; }
-  .hit .rank { color: var(--text-2); font-family: ui-monospace, Menlo, monospace; min-width: 2ch; }
-  .hit .score { color: var(--text-2); font-family: ui-monospace, Menlo, monospace; font-size: 13px; }
-  .hit .title { font-weight: 600; }
-  .hit .snippet { color: var(--text-2); font-size: 14px; margin-top: 4px; }
-  .hit .snippet mark { background: #fef08a; color: var(--text); padding: 0 2px;
-    border-radius: 3px; }
-  .empty, .error, .info { background: var(--surface); border: 1px solid var(--border);
-    border-radius: var(--radius); padding: 20px; margin-top: 20px; text-align: center; }
-  .error { border-color: var(--danger); color: var(--danger); }
-  .skeleton { background: var(--surface); border: 1px solid var(--border);
-    border-radius: var(--radius); height: 64px; margin-top: 10px;
-    opacity: 0.6; animation: pulse 1.2s ease-in-out infinite; }
-  @keyframes pulse { 0%,100% { opacity: 0.5; } 50% { opacity: 0.9; } }
-  @media (prefers-reduced-motion: reduce) {
-    .skeleton { animation: none; }
-  }
-  @media (max-width: 720px) {
-    .controls { flex-direction: column; align-items: stretch; }
-    .segmented { width: 100%; }
-    .segmented button { flex: 1; }
-  }
-</style>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>OneFind demo source moved</title>
+  <style>
+    body { max-width: 680px; margin: 12vh auto; padding: 24px; font: 16px/1.6 system-ui, sans-serif; color: #151827; background: #f6f7fb; }
+    main { padding: 28px; border: 1px solid #dfe2ec; border-radius: 18px; background: white; box-shadow: 0 18px 50px rgba(31,35,58,.09); }
+    code { padding: 3px 6px; border-radius: 5px; background: #eeedff; }
+  </style>
 </head>
 <body>
-<header>
-  <h1>OneFind demo</h1>
-  <div class="stats" id="stats" aria-live="polite">loading…</div>
-</header>
-<main>
-  <div class="search-card" role="search">
-    <form class="search-row" onsubmit="event.preventDefault(); submitSearch();">
-      <input id="q" type="search" placeholder='Try "vitamin" or "foam midsoles"…'
-             aria-label="search query" autocomplete="off" />
-    </form>
-    <div class="controls">
-      <div class="segmented" role="group" aria-label="search mode">
-        <button id="m-lexical" aria-pressed="true" onclick="setMode('lexical')">lexical</button>
-        <button id="m-semantic" aria-pressed="false" onclick="setMode('semantic')">semantic</button>
-        <button id="m-hybrid" aria-pressed="false" onclick="setMode('hybrid')">hybrid</button>
-      </div>
-      <div id="precision-row" class="segmented" role="group" aria-label="precision" hidden>
-        <button id="p-float"   aria-pressed="true"  onclick="setPrecision('float')">float</button>
-        <button id="p-int8"    aria-pressed="false" onclick="setPrecision('int8')">int8</button>
-        <button id="p-binary"  aria-pressed="false" onclick="setPrecision('binary')">binary</button>
-      </div>
-    </div>
-  </div>
-  <div id="results" class="results" aria-live="polite"></div>
-</main>
-<script>
-let mode = "lexical";
-let precision = "float";
-const $q = document.getElementById("q");
-const $results = document.getElementById("results");
-const $stats = document.getElementById("stats");
-const $pRow = document.getElementById("precision-row");
-
-function setMode(m) {
-  mode = m;
-  for (const v of ["lexical","semantic","hybrid"]) {
-    document.getElementById("m-" + v).setAttribute("aria-pressed", v === m);
-  }
-  $pRow.hidden = (m === "lexical");
-  submitSearch();
-}
-function setPrecision(p) {
-  precision = p;
-  for (const v of ["float","int8","binary"]) {
-    document.getElementById("p-" + v).setAttribute("aria-pressed", v === p);
-  }
-  if (mode !== "lexical") submitSearch();
-}
-
-async function loadStats() {
-  try {
-    const r = await fetch("/api/stats");
-    if (!r.ok) throw new Error("status " + r.status);
-    const s = await r.json();
-    if (s.documents === 0) {
-      $stats.textContent = "no documents indexed";
-      renderInfo("This demo has no index yet. Run "
-        + "<code>OneFind index ./sample-data --db demo.db --embed</code> "
-        + "then restart the server.");
-      return false;
-    }
-    $stats.textContent = `${s.documents} docs · ${s.vectors ?? 0} vectors · ${s.model ?? "lexical only"}`;
-    return true;
-  } catch (e) {
-    $stats.textContent = "stats unavailable";
-    return false;
-  }
-}
-
-function escapeHtml(s) {
-  return s.replace(/[&<>"']/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;","\"":"&quot;","'":"&#39;"}[c]));
-}
-
-function renderSkeleton() {
-  $results.innerHTML = "<div class='skeleton'></div><div class='skeleton'></div><div class='skeleton'></div>";
-}
-function renderEmpty() {
-  $results.innerHTML = "<div class='empty'>Nothing matched. Try another mode or a different query.</div>";
-}
-function renderError(msg) {
-  $results.innerHTML = `<div class='error'>${escapeHtml(msg)}</div>`;
-}
-function renderInfo(html) {
-  $results.innerHTML = `<div class='info'>${html}</div>`;
-}
-function renderResults(hits) {
-  $results.innerHTML = "";
-  for (const h of hits) {
-    const snippet = h.snippet ? `<div class='snippet'>${h.snippet}</div>` : "";
-    const div = document.createElement("div");
-    div.className = "hit";
-    div.innerHTML = `
-      <div class='head'>
-        <span class='rank'>${h.rank}.</span>
-        <span class='title'>${escapeHtml(h.title || h.doc_id)}</span>
-        <span class='score'>[${h.score.toFixed(4)}]</span>
-      </div>${snippet}`;
-    $results.appendChild(div);
-  }
-}
-
-let inflight = null;
-async function submitSearch() {
-  const query = $q.value.trim();
-  if (!query) { $results.innerHTML = ""; return; }
-  if (inflight) inflight.abort();
-  inflight = new AbortController();
-  renderSkeleton();
-  try {
-    const r = await fetch("/api/search", {
-      method: "POST",
-      headers: {"content-type":"application/json"},
-      body: JSON.stringify({query, mode, precision, k: 10}),
-      signal: inflight.signal,
-    });
-    if (!r.ok) {
-      const body = await r.json().catch(() => ({}));
-      renderError(body.error?.message || ("search failed (" + r.status + ")"));
-      return;
-    }
-    const body = await r.json();
-    if (!body.results.length) { renderEmpty(); return; }
-    renderResults(body.results);
-  } catch (e) {
-    if (e.name === "AbortError") return;
-    renderError(String(e));
-  }
-}
-
-document.addEventListener("keydown", e => {
-  if (e.key === "/" && document.activeElement !== $q) {
-    e.preventDefault();
-    $q.focus();
-  }
-  if (e.key === "Enter" && document.activeElement === $q) submitSearch();
-});
-loadStats().then(ok => { if (ok) $q.focus(); });
-</script>
+  <main>
+    <h1>The OneFind UI now ships inside the Python package</h1>
+    <p>This avoids missing assets in wheel installations. Start the local service to use the full interface:</p>
+    <p><code>onefind index ./sample-data --db demo.db --embed</code><br>
+       <code>onefind serve --db demo.db</code></p>
+    <p>Then open <a href="http://127.0.0.1:8080/">http://127.0.0.1:8080/</a>.</p>
+  </main>
 </body>
 </html>

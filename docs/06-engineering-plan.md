@@ -1,7 +1,25 @@
 # 06 · Engineering Implementation Plan
 
-Project: OneFind reproduction · Version: v0.1 (draft) · Status: Proposed
+Project: OneFind · Version: 1.1 · Status: Implemented
 Execution model: **paper-reproduction loop** — each phase = read relevant paper section → implement one task → test → compare against paper behavior → commit with evidence. AI assists per-task, never generates whole phases.
+
+## v1.1 hardening pass — completed
+
+The original V1 reproduced the architecture but contained correctness and release gaps discovered during independent review. The hardening pass adds:
+
+- strongest-first BM25 regression coverage;
+- native sqlite-vec float KNN;
+- complete rerank pool, refreshed cosine scores, and one query encoding;
+- exact linear-fusion endpoint passthroughs;
+- canonical path IDs, JSONL ingest, and schema-v2 identity safety;
+- transactional encoder validation and vector health;
+- atomic manifest-bound evaluation databases;
+- bounded quantized scanning and external cache invalidation;
+- 20-document/26-query free smoke corpus;
+- packaged, accessible, CSP-protected no-build UI;
+- 112 tests, clean-install CI, wheel verification, and MIT licensing.
+
+Historical benchmark claims are superseded until regenerated from this implementation.
 
 ## Phase map (reproduction guide steps → phases)
 
@@ -17,7 +35,7 @@ Execution model: **paper-reproduction loop** — each phase = read relevant pape
 ## Tasks
 
 ### T-00 · Environment proof (P0)
-Outcome: `OneFind check` passes on target laptop. Deps: none.
+Outcome: `onefind check` passes on target laptop. Deps: none.
 Notes: verify FTS5 in bundled SQLite; install sqlite-vec; download MiniLM; record versions in `benchmarks/env-<date>.md`.
 Acceptance: check exits 0 listing sqlite/fts5/vec/model versions; exit 3 with named fix when an extension is absent.
 Tests: unit test mocking missing extension path. Evidence: terminal transcript committed to docs.
@@ -41,7 +59,7 @@ Outcome: batched encoding at index time; cosine KNN query mode.
 Acceptance: semantic search finds paraphrase doc containing no shared keywords (curated test case); p95 embed+query budget met on smoke set.
 
 ### T-05 · Quantized precisions: int8 + binary (P2)
-Outcome: vec_int8 / vec_bit written at index time; selectable precision.
+Outcome: float vectors stored in sqlite-vec; int8/binary precision available through deterministic application-side transforms per ADR-7.
 Acceptance: same query across precisions returns overlapping-but-not-identical rankings (sanity), all three modes runnable.
 
 ### T-06 · RRF fusion + rerank flag (P3)

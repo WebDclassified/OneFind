@@ -1,135 +1,241 @@
-# OneFind — Single-File Hybrid Information Retrieval
+# OneFind — Free Local Hybrid Information Retrieval
 
-**OneFind** is a hybrid information-retrieval system that combines lexical search (BM25 via SQLite FTS5), semantic search (via `sqlite-vec`), and Reciprocal Rank Fusion into a single library, CLI, and localhost web demo. It is a from-scratch reimplementation and independent extension of the architecture proposed in **[SQLite is Enough: Lexical, Semantic, and Hybrid Search with scrydb](https://arxiv.org/abs/2608.24060)** (arXiv:2608.24060, cs.IR).
+**OneFind** combines SQLite FTS5 keyword search, sqlite-vec float KNN, quantized semantic ranking, and Reciprocal Rank Fusion in one local SQLite file. It ships as a Python library, a lowercase cross-platform CLI, a polished localhost web UI, reproducible BEIR evaluations, and a 20-document offline demo corpus.
 
-> **Major-project final report**: see [`FORMAL_PROJECT_REPORT.md`](FORMAL_PROJECT_REPORT.md) for the academic-style write-up (Executive Summary → Related Work → Design → Results → Discussion → Conclusion → Future Work → Appendices).
->
-> **Step-by-step run guide**: [`HOW_TO_RUN.md`](HOW_TO_RUN.md).
-> **Viva preparation**: [`VIVA_QUESTIONS.md`](VIVA_QUESTIONS.md) and [`TEAM_PREPARATION.md`](TEAM_PREPARATION.md).
->
-> **Portfolio project**: read literature → implement from scratch → reproduce reported behavior → extend → publish.
+Everything runs on free, local CPU infrastructure. There are no paid APIs, cloud services, hosted vector databases, telemetry, or frontend dependencies.
 
-## Quickstart (clone → demo in ~5 minutes)
+> Corrected v1.1 evidence supersedes the original prototype reports after the BM25, rerank-score, and fusion fixes. See `benchmarks/reports/` and `HOW_TO_RUN.md`.
+
+## Highlights
+
+- Correct strongest-first BM25 ranking with deterministic tie-breaking.
+- Native float cosine KNN through sqlite-vec.
+- Exact int8 and binary ranking in bounded NumPy blocks.
+- Hybrid RRF plus weighted linear fusion with exact endpoint passthrough.
+- Optional cosine reranking over a configurable 50-document-per-leg candidate pool.
+- Transactional document, FTS, chunk, and vector writes.
+- Collision-safe relative-path document IDs and JSONL ingestion.
+- Atomic, manifest-bound evaluation databases.
+- 20 cross-domain sample documents and 26 gold retrieval queries.
+- 112 automated tests, including fake-model edge cases and local MiniLM integration.
+- Responsive, accessible, CSP-protected UI packaged inside the wheel.
+- CPU-only operation with a reusable local model cache.
+
+## Quickstart
 
 ```bash
-git clone <this repo> onefind
-cd onefind
+git clone https://github.com/WebDclassified/OneFind.git
+cd OneFind
 python -m venv .venv
-.venv\Scripts\activate                      # Windows
-# source .venv/bin/activate                  # Linux/macOS
-pip install -e ".[model,eval,serve]"
+```
 
-# 1. prove the environment
-OneFind check --full
+Activate the environment:
 
-# 2. reproduce one BEIR dataset end-to-end (downloads, embeds, evaluates)
-OneFind eval scifact --db data/scifact.db
-OneFind eval nfcorpus --db data/nfcorpus.db
+```powershell
+# Windows
+.\.venv\Scripts\Activate.ps1
+```
 
-# 3. or try a tiny in-memory demo with the included sample data
-OneFind index ./sample-data --db demo.db --embed
-OneFind serve --db demo.db --port 8080
-# open http://127.0.0.1:8080/
+```bash
+# macOS / Linux
+source .venv/bin/activate
+```
 
-# 4. run the tests
+Install the complete free local stack:
+
+```bash
+python -m pip install --upgrade pip
+pip install -e ".[model,eval,serve,dev]"
+```
+
+Build and evaluate the expanded offline corpus:
+
+```bash
+onefind check --full
+onefind index ./sample-data --db demo.db --embed
+onefind smoke --db demo.db --queries sample-data/queries.jsonl
+```
+
+Start the UI:
+
+```bash
+onefind serve --db demo.db --port 8080
+```
+
+Open <http://127.0.0.1:8080/>.
+
+Run all tests:
+
+```bash
 pytest
 ```
 
-## What this repo contains
+## CLI
+
+| Command | Purpose |
+|---|---|
+| `onefind check` | Verify Python, SQLite FTS5, sqlite-vec, and model availability |
+| `onefind index PATH` | Index a folder, text file, or JSONL corpus |
+| `onefind search QUERY` | Run lexical, semantic, or hybrid retrieval |
+| `onefind eval DATASET` | Build and evaluate a BEIR-style dataset |
+| `onefind sweep-alpha DATASET` | Compare linear fusion weights against RRF |
+| `onefind smoke` | Run JSONL gold queries against an existing index |
+| `onefind serve` | Start the secure local web application |
+
+## Architecture
+
+```text
+CLI / web UI / evaluation harness
+                 │
+                 ▼
+       onefind.search dispatcher
+        ┌────────┼──────────┐
+        ▼        ▼          ▼
+     FTS5 BM25  float KNN  hybrid RRF
+        │        │          │
+        └────────┴────┬─────┘
+                      ▼
+               one SQLite file
+      documents · chunks · FTS · vectors · manifest
+```
+
+### Retrieval paths
+
+- **Keyword:** SQLite FTS5/BM25, strongest match first.
+- **Semantic float:** native sqlite-vec cosine KNN over normalized float32 vectors.
+- **Semantic int8:** globally scaled 8-bit cosine ranking in bounded blocks.
+- **Semantic binary:** sign-bit Hamming ranking in bounded blocks.
+- **Hybrid:** RRF by default; linear normalization is available for research comparisons.
+- **Rerank:** one query encoding, complete fused-pool cosine scoring, and refreshed output scores.
+
+## Sample retrieval corpus
+
+The bundled `sample-data/` directory contains 20 short documents across:
+
+- plant biology and nutrition;
+- exercise and footwear;
+- food fermentation;
+- intertidal ecology;
+- bicycle mechanics;
+- sleep neuroscience;
+- composting and agriculture;
+- cloud formation;
+- music theory;
+- caption accessibility;
+- corrosion and materials;
+- geometry and architecture;
+- library operations;
+- personal finance;
+- vector search;
+- ceramics;
+- two same-stem documents in different folders to exercise identity safety.
+
+`sample-data/queries.jsonl` provides 26 cases (25 answerable plus one no-answer) for lexical, semantic, hybrid, disambiguation, and abstention behavior. The current local run achieves **1.000 Hit@3, 1.000 MRR@5, and 1.000 no-answer accuracy**.
+
+## Corrected benchmark evidence
+
+### Corrected full runs — 2026-09-24
+
+| Configuration | SciFact nDCG@10 | NFCorpus nDCG@10 |
+|---|---:|---:|
+| lexical BM25 | 0.0467 | 0.2073 |
+| semantic float | 0.6451 | 0.3167 |
+| semantic int8 | 0.6465 | 0.3160 |
+| semantic binary | 0.5827 | 0.2761 |
+| hybrid float (RRF) | **0.6568** | **0.3466** |
+| hybrid int8 (RRF) | **0.6582** | 0.3465 |
+| hybrid binary (RRF) | 0.5959 | 0.3169 |
+| hybrid float + cosine rerank | 0.6451 | 0.3167 |
+
+**What changed and what the corrected evidence says:**
+
+- Hybrid float beats the best single mode on both datasets: +0.0117 on SciFact and +0.0299 on NFCorpus.
+- Int8 remains extremely close to float quality, but the current exact bounded scan is much slower; this implementation does **not** reproduce the paper's quantized speed advantage.
+- Binary loses quality and is still slower than native float KNN on these runs. Its value is a mathematical configuration study, not a performance win.
+- Pure-cosine reranking hurts both datasets once the deeper 100-document fused pool is rescored. RRF remains the safer default.
+- The original ≤150 ms p95 goal is not met by vector modes on this CPU. Float-hybrid p95 is 174.8 ms on SciFact and 218.3 ms on NFCorpus; reports preserve the real values.
+- The linear alpha sweep is effectively tied with RRF: SciFact linear α=0.1 scores 0.6572 versus RRF 0.6568, and NFCorpus linear α=0.2 scores 0.3470 versus RRF 0.3466. A 0.0004 single-run difference is not strong evidence of superiority.
+
+Full provenance-rich reports:
+
+- [`eval-scifact-2026-09-24.md`](benchmarks/reports/eval-scifact-2026-09-24.md)
+- [`eval-nfcorpus-2026-09-24.md`](benchmarks/reports/eval-nfcorpus-2026-09-24.md)
+- [`alpha-sweep-scifact-2026-09-24.md`](benchmarks/reports/alpha-sweep-scifact-2026-09-24.md)
+- [`alpha-sweep-nfcorpus-2026-09-24.md`](benchmarks/reports/alpha-sweep-nfcorpus-2026-09-24.md)
+
+The reports capture the resolved runtime revision when available; this run honestly records `unpinned` for the sentence-transformers model. Dataset files, code state, package versions, and selected IDs are recorded. These are single-run measurements, not confidence intervals.
+
+Historical `2026-08-26` reports are retained for transparency but are not valid evidence for the corrected implementation because the original prototype reversed BM25 ordering and reranking retained stale fusion scores.
+
+Regenerate current evidence with:
+
+```bash
+onefind eval scifact --db data/scifact.db
+onefind eval nfcorpus --db data/nfcorpus.db
+onefind sweep-alpha scifact --db data/scifact.db
+onefind sweep-alpha nfcorpus --db data/nfcorpus.db
+```
+
+## Web UI
+
+The UI lives in `src/onefind/static/` and is included in the wheel.
+
+![Current OneFind hybrid search UI](screenshots/ui-03-hybrid-results.png)
+
+| Idle workspace | Mobile results |
+|---|---|
+| ![Idle OneFind workspace](screenshots/ui-01-index-ready.png) | ![Responsive OneFind results](screenshots/ui-06-mobile-results.png) |
+
+### Comprehensive browser evidence
+
+The root [`sshot/`](sshot/) directory contains 21 Playwright screenshots covering every documented UI state, retrieval mode/precision, result-count option, URL restoration, dark mode, mobile layout, lexical-only capabilities, no-index behavior, network/validation errors, and inert rendering of hostile HTML. Machine-readable assertions and console results are in [`sshot/manifest.json`](sshot/manifest.json).
+
+Reproduce the browser evidence with an existing local Chrome installation:
+
+```bash
+pip install -e ".[browser]"
+python tools/browser_check.py --output sshot
+```
+
+- semantic and hybrid controls follow index capabilities;
+- all indexed text is rendered with DOM text nodes or validated highlight segments;
+- no response content is inserted as HTML;
+- CSP, `nosniff`, frame denial, no-referrer, and permissions restrictions are enabled;
+- loading, idle, no-index, empty, error, and result states are explicit;
+- native radio groups expose mode and precision choices accessibly;
+- request cancellation and sequence checks prevent stale responses from replacing newer results;
+- the server binds to loopback unless remote exposure is explicitly acknowledged.
+
+## Data integrity and safety
+
+- Text/JSONL documents use collision-free IDs.
+- Embedded indexes reject lexical-only updates that would leave vectors stale.
+- Late model attachment backfills missing vectors.
+- Encoder output shape, finite values, and zero vectors are validated.
+- Failed batches roll back; failed evaluation builds never replace the target database.
+- Evaluation manifests bind dataset hashes, selected IDs, model revision, metrics, and configuration.
+- Dataset downloads use temporary files and atomic publication.
+- Quantized scans are block-bounded and detect concurrent index changes.
+- Reset is disabled unless an explicit token is supplied at startup.
+
+## Repository map
 
 | Path | Purpose |
 |---|---|
-| `FORMAL_PROJECT_REPORT.md` | **Full academic report** with Executive Summary, Abstract, References, Appendices |
-| `HOW_TO_RUN.md` | **Step-by-step reproduction guide** from a fresh machine to a working demo |
-| `VIVA_QUESTIONS.md` | **Anticipated defense questions** with model answers (categorized) |
-| `TEAM_PREPARATION.md` | **Full project briefing for the 3 teammates** — story, architecture, demo, Q&A |
-| `REPORT.md` | Earlier, shorter academic-style report |
-| `docs/01-prd.md` … `docs/07-references.md` | Six-document spec system (source of truth, versioned with code) |
-| `src/onefind/` | The OneFind library + CLI + FastAPI demo |
-| `tests/` | pytest suite — 67 tests, model- and serve-extras gated |
-| `benchmarks/reports/` | Generated evaluation reports + review notes |
-| `demo/index.html` | Single-page demo UI (vanilla JS, no build step) |
-| `sample-data/` | Four tiny `.md` files for the smoke demo |
-| `data/` | BEIR datasets cache (gitignored, auto-downloaded) |
-| `screenshots/` | Placeholder for demo screenshots |
+| `src/onefind/` | Library, CLI, evaluator, and server |
+| `src/onefind/static/` | Packaged no-build web interface |
+| `tests/` | 112 unit, integration, API, and packaging tests |
+| `sample-data/` | 20 documents plus 26 gold queries |
+| `benchmarks/reports/` | Generated evaluation and extension reports |
+| `docs/` | Product, architecture, flow, UI, backend, plan, and references |
+| `HOW_TO_RUN.md` | Complete local reproduction guide |
+| `FORMAL_PROJECT_REPORT.md` | Academic report with historical context and corrected-evidence notice |
+| `LICENSE` | MIT license |
 
-## Results (vs paper)
+## Free and local by design
 
-Reproduced on CPU with `all-MiniLM-L6-v2` (the paper uses an 8B-parameter embedder — see ADR-3 for the deliberate deviation). Full reports: [`benchmarks/reports/eval-scifact-2026-08-26.md`](benchmarks/reports/eval-scifact-2026-08-26.md), [`benchmarks/reports/eval-nfcorpus-2026-08-26.md`](benchmarks/reports/eval-nfcorpus-2026-08-26.md).
+OneFind intentionally avoids recurring-cost components. The default stack uses Python, SQLite, FTS5, sqlite-vec, NumPy, open-source sentence-transformers, FastAPI, and vanilla browser APIs. Models and datasets are downloaded once and cached locally.
 
-### nDCG@10 — ours vs paper (SciFact)
+## License
 
-| Configuration | Ours (MiniLM) | Paper (Qwen3-8B MTEB / RRF) | Direction reproduced? |
-|---|---|---|---|
-| lexical | 0.0467 | ~0.18 | — (paper shows BM25 weak on fact-checking too) |
-| semantic (float) | 0.6451 | 0.769 | gap explained by ADR-3 model scale |
-| semantic (int8) | 0.6451 | ≈ float (paper claim) | **yes** — identical to float here |
-| semantic (binary) | 0.5827 | ≈ 0.59 (paper Hamming column) | **yes** — ~10% drop vs float |
-| hybrid (float) | **0.6568** | top of paper's hybrid table | **yes** — best of all |
-| hybrid (int8) | 0.6568 | ≈ hybrid float | **yes** — quantization safe |
-| hybrid (binary) | 0.5959 | within ~2% of paper Hamming hybrid | **yes** |
-| hybrid + rerank | 0.6548 | similar (paper notes rerank often neutral) | **yes** — rerank no help when float already optimal |
-
-### Qualitative claims the reproduction confirms
-
-- **Hybrid ≥ best single mode** on both datasets (SciFact 0.6568 > 0.6451; NFCorpus 0.3249 > 0.3167).
-- **int8 loses essentially nothing** vs float at retrieval-quality level (SciFact identical; NFCorpus -0.0011).
-- **Binary is the cheapest precision that still dominates lexical** (SciFact 0.5827 vs 0.0467).
-- **Rerank is a tie on these collections** — float cosine over the fused candidate pool is already near-optimal when the fused pool is small.
-
-### Deviations from the paper (all documented in `docs/02`)
-
-- **ADR-3** — model downscaled to MiniLM-L6-v2 (CPU, free). Absolute nDCG shifts as expected; directional findings survive.
-- **ADR-7** — int8/binary computed application-side over stored float vectors because the shipped `sqlite-vec` 0.1.9 wheel rejects all int8/bit inputs (verified empirically). Math is identical to the paper's configurations.
-- **ADR-8** — RRF k=60, leg depth = requested k, rerank pool = fused candidates.
-- **Dataset scope** — SciFact + NFCorpus (5.2K + 3.6K docs). Touché (382K) and TREC-COVID (171K) excluded from the default scope; the harness supports them via registry.
-
-## Extension: weighted linear fusion vs RRF (T-10)
-
-Adds a second hybrid strategy to `hybrid_search` (CLI: `--fusion linear` + `--alpha`). The same legs are retrieved, each leg's scores are min-max-normalized to `[0, 1]`, then blended `α * semantic + (1-α) * lexical`. Full reports:
-[`benchmarks/reports/alpha-sweep-scifact-2026-08-26.md`](benchmarks/reports/alpha-sweep-scifact-2026-08-26.md),
-[`benchmarks/reports/alpha-sweep-nfcorpus-2026-08-26.md`](benchmarks/reports/alpha-sweep-nfcorpus-2026-08-26.md).
-
-| α | SciFact nDCG@10 | NFCorpus nDCG@10 |
-|---|---|---|
-| 0.0 (pure lexical) | 0.4396 | 0.2763 |
-| 0.1 – 0.5 plateau | **0.6572** | 0.3166 – 0.3217 |
-| 0.6 | 0.6548 | **0.3229** (best linear) |
-| 1.0 (pure semantic) | 0.6460 | 0.3170 |
-| **RRF baseline (default)** | **0.6568** | **0.3249** |
-
-**Conclusions.**
-- On **SciFact**, linear fusion with any `α ∈ [0.1, 0.5]` ties RRF to 4 decimal places — a flat plateau, suggesting the two legs mostly retrieve the same top set and blending does not hurt.
-- On **NFCorpus**, **RRF beats the best linear by 0.002** (0.3249 vs 0.3229). RRF's rank-position aggregation is more robust when the two legs have very different score distributions and a wider gap between the top document and the rest.
-- Either way, the differences are inside the noise of these single-run numbers; the practical choice is whichever is simpler to operate, and RRF stays the default per the paper.
-
-## Self review (T-09)
-
-`benchmarks/reports/review-t09.md` records what was checked, what changed, and what was intentionally left alone after a self-pass through the engine and the Phase 4 numbers.
-
-## Status
-
-- [x] Step 1–2: Paper selected & analyzed (facts in `docs/02-technical-design.md`)
-- [x] Phase 0: Foundation (`benchmarks/reports/env-2026-08-26.md`)
-- [x] Phase 1: Lexical engine (FTS5/BM25) — ingest idempotent, ranked search live
-- [x] Phase 2: Semantic layer (sqlite-vec float storage + app-side int8/bit per ADR-7)
-- [x] Phase 3: Hybrid RRF + rerank (RRF k=60; ablation ≥5/10 curated wins)
-- [x] Phase 4: Reproduce BEIR results — SciFact & NFCorpus reports committed; qualitative paper claims confirmed
-- [x] Phase 5: Review (`benchmarks/reports/review-t09.md`) + alpha-sweep extension on both datasets
-- [x] Phase 6: Demo web app (`OneFind serve`) + publish polish — all PRD success signals met
-- [x] Defense prep: `FORMAL_PROJECT_REPORT.md`, `HOW_TO_RUN.md`, `VIVA_QUESTIONS.md`, `TEAM_PREPARATION.md`
-
-## What we learned / what surprised us
-
-- **A shipped library can claim capabilities the binary doesn't deliver.** The `sqlite-vec` 0.1.9 wheel *declares* `int8[n]` and `bit[n]` vector columns but rejects every input path we probed. The reproduction's most interesting finding is in `docs/02 ADR-7` — and the application-side quantization path is mathematically equivalent to the paper's configurations.
-- **Hybrid fusion isn't free improvement.** RRF wins by rank-position, not by score magnitude; on NFCorpus the *best* linear fusion loses to default RRF by 0.002 nDCG. Score-similarity between legs is not a free lunch.
-- **A 384-dim embedder reproduces all the paper's directional claims** even though absolute nDCG sits below the paper's 8B baseline. Quality is mostly about the architecture, not the model size.
-- **Six-doc spec + paper-reproduction loop is a self-correcting system.** Every stale-guard test, every "sanity noop" line, every "loading embedding model: None" came out of the run-evidence-assert loop, not from reading the code in isolation. The loop is the methodology.
-
-## Future work (out of V1 scope)
-
-- Cross-encoder reranker on hybrid top-50 (quality vs latency curve)
-- Matryoshka-style dimension reduction for MiniLM
-- Watch-folder live re-index
-- Document-level chunking for application use-cases (BEIR eval stays whole-doc per ADR-4)
-- PyPI package name (upstream already owns `OneFind`; rename for any public release)
+MIT. See `LICENSE`.

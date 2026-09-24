@@ -1,5 +1,6 @@
 """Tests for T-00 environment verification."""
 
+import argparse
 import json
 
 import pytest
@@ -48,18 +49,25 @@ def test_cli_check_exit_zero_with_json_output(capsys):
     assert parsed["ok"] is True
 
 
-def test_planned_subcommands_are_explicit_stubs():
-    # no subcommands remain as stubs after Phase 6; this test stays as a
-    # placeholder so future planned commands (delete/delete-doc?) can be
-    # added back here when the project grows.
-    pass
+def test_all_advertised_subcommands_are_real():
+    from onefind.cli import build_parser
+
+    subparsers = next(
+        action for action in build_parser()._actions
+        if isinstance(action, argparse._SubParsersAction)
+    )
+    assert set(subparsers.choices) == {
+        "check", "index", "search", "eval", "sweep-alpha", "smoke", "serve"
+    }
 
 
 def test_real_subcommands_require_their_arguments():
     # every subcommand takes arguments; missing args -> argparse exit 2
     import pytest
 
-    for argv in (["index"], ["search"], ["eval"], ["sweep-alpha"], ["serve"]):
+    for argv in (
+        ["index"], ["search"], ["eval"], ["sweep-alpha"], ["smoke"], ["serve"]
+    ):
         with pytest.raises(SystemExit) as excinfo:
             main(argv)
         assert excinfo.value.code == EXIT_USAGE

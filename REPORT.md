@@ -1,5 +1,7 @@
 # Major Project Report — OneFind reproduction
 
+> **Superseded evidence notice (2026-09-24):** the original v1.0 lexical ordering and rerank-score defects were corrected in v1.1. Historical numbers in this shorter report are retained for transparency; current evidence is in the newly dated `benchmarks/reports/` files and `README.md`.
+
 > **Submission-style technical report.** This document is the academic
 > write-up of the project; the running code and CLI live in this repo,
 > the day-to-day status is the README, and the source-of-truth spec is
@@ -355,12 +357,12 @@ git clone <this repo> OneFind
 cd OneFind
 python -m venv .venv && .venv\Scripts\activate   # Windows
 pip install -e ".[model,eval,serve]"
-OneFind check --full
-OneFind eval scifact --db data/scifact.db
-OneFind eval nfcorpus --db data/nfcorpus.db
+onefind check --full
+onefind eval scifact --db data/scifact.db
+onefind eval nfcorpus --db data/nfcorpus.db
 OneFind sweep-alpha scifact --db data/scifact.db
 OneFind sweep-alpha nfcorpus --db data/nfcorpus.db
-OneFind serve --db data/scifact.db --port 8080
+onefind serve --db data/scifact.db --port 8080
 pytest
 ```
 
@@ -371,7 +373,7 @@ pytest
 | `REPORT.md` | This document — academic report |
 | `README.md` | GitHub-style overview and quickstart |
 | `docs/01-prd.md` … `docs/07-references.md` | Living specification (source of truth) |
-| `src/OneFind/` | Library, CLI, evaluation harness, FastAPI demo |
+| `src/onefind/` | Library, CLI, evaluation harness, FastAPI demo |
 | `tests/` | pytest suite — 67 tests |
 | `benchmarks/reports/` | Generated evaluation reports + review notes |
 | `demo/index.html` | Single-page demo UI (no build step) |

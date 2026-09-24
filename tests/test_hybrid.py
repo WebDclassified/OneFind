@@ -46,16 +46,16 @@ def test_rrf_handles_empty_legs():
 # ---- hybrid with real embeddings ---------------------------------------------
 
 CURATED = [  # (query, expected top doc)
-    ("chlorophyll", "photosynthesis"),
-    ("how plants turn sunlight into food", "photosynthesis"),
-    ("vitamin C in oranges", "citrus-vitamin-c"),
-    ("nutrients that help absorb iron", "citrus-vitamin-c"),
-    ("foam midsole cushioning", "running-shoes"),
-    ("shoes that return energy to runners", "running-shoes"),
-    ("wild yeast starter culture", "sourdough"),
-    ("bread that rises naturally tangy flavor", "sourdough"),
-    ("glucose oxygen chloroplasts", "photosynthesis"),
-    ("carbon fiber plates racing", "running-shoes"),
+    ("chlorophyll", "photosynthesis.md"),
+    ("how plants turn sunlight into food", "photosynthesis.md"),
+    ("vitamin C in oranges", "citrus-vitamin-c.md"),
+    ("nutrients that help absorb iron", "citrus-vitamin-c.md"),
+    ("foam midsole cushioning", "running-shoes.md"),
+    ("shoes that return energy to runners", "running-shoes.md"),
+    ("wild yeast starter culture", "sourdough.md"),
+    ("bread that rises naturally tangy flavor", "sourdough.md"),
+    ("glucose oxygen chloroplasts", "photosynthesis.md"),
+    ("carbon fiber plates racing", "running-shoes.md"),
 ]
 
 
@@ -112,6 +112,30 @@ def test_rerank_orders_by_true_cosine(embedded_db, embedder):
 
     best = max(sims, key=sims.get)
     assert hits[0].doc_id == best
+    assert [hit.score for hit in hits] == pytest.approx(
+        [sims[hit.doc_id] for hit in hits]
+    )
+
+
+def test_rerank_encodes_query_only_once(embedded_db, embedder, monkeypatch):
+    calls = 0
+    original = embedder.encode_query
+
+    def counted(text):
+        nonlocal calls
+        calls += 1
+        return original(text)
+
+    monkeypatch.setattr(embedder, "encode_query", counted)
+    hits = _hybrid(
+        embedded_db,
+        embedder,
+        "energy return midsole",
+        rerank=True,
+        candidate_depth=4,
+    )
+    assert hits
+    assert calls == 1
 
 
 def test_dispatcher_routes_hybrid_with_options(embedded_db, embedder):

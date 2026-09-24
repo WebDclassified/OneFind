@@ -1,69 +1,78 @@
 # 01 · Product Requirements Document
 
-Project: OneFind reproduction · Version: v0.1 (draft) · Status: Proposed
-Owner: project author · Companion docs: 02–07 in this folder
+Project: OneFind · Version: 1.1 · Status: Implemented
 
-## PRODUCT SUMMARY
+## Product summary
 
-CS students / junior ML-and-IR engineers who want to understand and demonstrate modern hybrid retrieval currently face heavyweight alternatives (Elasticsearch, pgvector, hosted vector DBs); this project rebuilds the OneFind pipeline — FTS5 lexical + sqlite-vec semantic + RRF hybrid search inside one local SQLite file — from its paper, reproduces its BEIR evaluation directionally on affordable hardware, and ships a demo + written comparison as a portfolio artifact.
+OneFind is a free, local information-retrieval toolkit for students, researchers, and developers who need lexical, semantic, and hybrid search without a hosted vector service. It stores documents and retrieval structures in one SQLite file, exposes a Python API and CLI, and includes a localhost web demo.
 
-## TARGET USER & CURRENT ALTERNATIVE
+## Target user
 
-- Primary: you (portfolio/research skill-building) plus evaluators (professors, interviewers reading the repo).
-- Secondary: developers prototyping agentic/RAG search who need zero-infra retrieval.
-- Current alternatives: Elasticsearch/OpenSearch (ops-heavy), Postgres+pgvector (server), Pinecone/Weaviate (cloud cost, data leaves machine), upstream OneFind itself (the object of study — we reimplement to learn, then compare).
+- Students and engineers learning modern hybrid information retrieval.
+- Portfolio and academic reviewers inspecting a reproducible implementation.
+- Developers prototyping private local search over small or medium document collections.
 
-## V1 GOALS
+## V1 goals
 
-- G1: Python library implementing lexical (FTS5 BM25), semantic (sqlite-vec KNN at binary/int8/float precision), and hybrid (RRF) search over one SQLite database.
-- G2: CLI: `index`, `search`, `eval`, `serve`.
-- G3: Evaluation harness reproducing the paper's experimental design on a reduced BEIR subset (SciFact + NFCorpus core; FiQA stretch) with AP, RR, P@10, nDCG@10 + query latency p50/p95.
-- G4: Written results comparison: our numbers vs paper-reported patterns and MTEB baselines for our chosen embedder.
-- G5: One meaningful extension (see 06 §Extensions) + polished README.
+- **G1 — Retrieval engine:** FTS5 BM25, sqlite-vec float cosine KNN, exact int8/binary ranking, hybrid RRF, weighted linear fusion, and optional cosine reranking.
+- **G2 — Interfaces:** installable library, lowercase `onefind` CLI, and packaged localhost web UI.
+- **G3 — Evaluation:** SciFact and NFCorpus with nDCG@10, MAP@10, MRR@10, Precision@10, and p50/p95 latency.
+- **G4 — Evidence:** committed reports with dataset hashes, model revision, package/runtime metadata, and a database manifest.
+- **G5 — Extension:** an alpha sweep comparing weighted linear fusion with RRF.
+- **G6 — Safe local operation:** no paid API, cloud dependency, telemetry, or remote binding by default.
 
-## NON-GOALS (this release)
+## Non-goals
 
-- Multi-user auth, server deployment, horizontal scaling (>~100K docs).
-- Chunking strategies (V1 indexes whole documents, matching the paper's BEIR protocol; chunking is an application-layer feature later).
-- LLM answer generation / full RAG chat.
-- Matching absolute nDCG numbers of the paper's 8B-parameter embedder (explicit deviation, see ADR-3).
+- Multi-user authentication or internet-facing deployment.
+- Horizontal scaling or billions of vectors.
+- LLM answer generation.
+- GPU-required models.
+- Public PyPI release under the current name.
+- Whole-corpus approximate indexes for quantized modes; v1 uses exact bounded scans.
 
-## REQUIREMENTS (must-have)
+## Functional requirements
 
-**FR-01 Ingest** — Given a folder of `.txt`/`.md` files or a JSONL corpus, when `OneFind index <path> --db x.db` runs, then every document is stored and embedded; re-running is idempotent (upsert by stable doc id).
-Acceptance criteria: given empty folder → clear error, non-zero exit; given valid corpus → row counts match input; interrupted run leaves DB openable (transactional batches).
+### FR-01 — Ingest
 
-**FR-02 Lexical search** — FTS5 BM25 ranking over indexed docs.
-Acceptance: top-k returned for a keyword query on a loaded DB; empty query → validation error; no hits → empty result, exit 0.
+Accept a folder containing `.txt`/`.md`, a standalone text file, or a local JSONL dataset. Use the canonical relative filename as the document ID for file corpora, preventing same-stem collisions. Re-indexing is idempotent. Empty, malformed, duplicate, and missing inputs produce typed errors.
 
-**FR-03 Semantic search** — cosine KNN over stored embeddings with three storage precisions: `float32`, `int8`, `binary`.
-Acceptance: same query returns semantically related docs lacking exact keywords; precision modes all return results and differ only in measured quality/speed.
+### FR-02 — Lexical search
 
-**FR-04 Hybrid search** — RRF fusion of lexical + semantic rankings (paper's k parameter configurable, default per paper).
-Acceptance: fused ordering deterministic; `--mode lexical|semantic|hybrid` all reachable from CLI and API.
+Return strongest-first FTS5 BM25 matches with deterministic document-ID tie-breaking, safe arbitrary-query tokenization, and highlighted snippets.
 
-**FR-05 Evaluation harness** — `OneFind eval --dataset scifact` downloads/prepares the BEIR set, runs all configurations, emits a markdown report with AP/RR/P@10/nDCG@10 per configuration and latency percentiles.
-Acceptance: report regenerates deterministically given fixed seeds/model; runs end-to-end on CPU laptop.
+### FR-03 — Semantic search
 
-**FR-06 Results documentation** — README table comparing ours vs paper direction (does hybrid ≥ best single mode? does binary/int8 lose little quality vs float?) with deviations explained.
-Acceptance: every number traceable to a committed report file.
+Return cosine neighbors in float, int8, or binary mode. Float uses native sqlite-vec KNN. Int8 and binary use deterministic application-side transforms over stored float vectors in bounded blocks.
 
-**FR-07 Demo serve** — `OneFind serve` opens a local-only page: query box, mode toggle, results with scores.
-Acceptance: loading/empty/no-results/error states all implemented (see doc 03).
+### FR-04 — Hybrid search
 
-## SUCCESS SIGNALS
+Fuse lexical and semantic rankings with configurable RRF. Weighted linear fusion is available for research comparison. Alpha endpoints are exact passthroughs. Optional reranking uses a configurable per-leg candidate depth and returns refreshed cosine scores.
 
-- S1 Directional fidelity: hybrid nDCG@10 ≥ max(single-mode) on SciFact (paper reports this pattern); recorded with our numbers.
-- S2 Quantization trade-off reproduced: binary/int8 within a small, reported margin of float quality at measurably higher speed.
-- S3 Efficiency: p95 query latency ≤150 ms @ ≤10K docs on reference CPU laptop.
-- S4 Portfolio: repo passes a cold clone-to-demo test by a peer in ≤15 min.
+### FR-05 — Evaluation
 
-## ASSUMPTIONS / DEPENDENCIES / RISKS / OPEN QUESTIONS
+Build a fresh temporary index, evaluate all configurations, write a provenance-rich report, and atomically publish the database only after success. Persist and verify a dataset/configuration manifest before alpha sweeps.
 
-- A1 (assumption): bundled CPython SQLite on Windows target includes FTS5; sqlite-vec wheel installs cleanly. Verify in Phase 0 (T-00).
-- D1 (dependency): first run downloads the embedding model (~30–130 MB) — needs network once.
-- R1 (risk): BEIR download flakiness → vendor a cached copy under `data/` after first success.
-- R2 (risk): paper's headline model is Qwen3-Embedding-8B; our smaller embedder will shift absolute numbers — mitigated by comparing against MTEB baselines for *our* model (ADR-3).
-- OQ1: Do you have any CUDA GPU? Default plan assumes CPU-only (MiniLM-class embedder). If a GPU exists, we add bge-base as a second model.
-- OQ2: Dataset scope confirmed as SciFact+NFCorpus core, FiQA stretch? (Touché/TREC-COVID excluded for scale.)
-- OQ3: Package name: upstream owns "OneFind". Default working name stays `OneFind` locally; rename (e.g. `scrylite`) before any public release.
+### FR-06 — Results documentation
+
+Every current report must contain a machine-readable metric table plus model revision, dataset fingerprints, commit, runtime, and package versions. Historical reports affected by corrected defects must be marked superseded.
+
+### FR-07 — Demo serve
+
+Provide a responsive, accessible, packaged web UI with idle, loading, result, no-index, no-result, and error states. Untrusted indexed text must render as text, never executable HTML. Bind to loopback unless the user explicitly acknowledges remote exposure.
+
+## Success signals
+
+- **S1 — Direction:** hybrid nDCG@10 is competitive with or better than the best single mode on both full BEIR runs.
+- **S2 — Quantization:** int8 remains close to float quality; binary has a documented quality trade-off.
+- **S3 — Latency:** report p95 honestly for every mode. The original ≤150 ms target is a budget, not a claim of guaranteed compliance.
+- **S4 — Retrieval smoke:** bundled gold queries achieve at least 0.80 Hit@3 and 0.80 MRR@5, with perfect lexical no-answer handling.
+- **S5 — Reproducibility:** clean core CI, full local-stack CI, and a wheel containing the UI.
+- **S6 — Safety:** mandatory regression tests cover BM25 direction, rerank scores/pool, untrusted HTML, schema isolation, and stale-vector prevention.
+
+## Dependencies and risks
+
+- First model/dataset download requires internet; later runs are local.
+- CPU embedding dominates cold semantic latency.
+- Quantized modes are exact O(N) scans and have lower scale than a dedicated vector service.
+- Mutable model repositories require revision capture in evaluation evidence.
+- Broad dependency ranges are bounded in `pyproject.toml`; a future lock file can further stabilize developer environments.

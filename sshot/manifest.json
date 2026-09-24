@@ -1,0 +1,221 @@
+{
+  "generated_at": "2026-09-24T12:39:21.432615+00:00",
+  "browser": "Chrome/Chromium via Playwright",
+  "base_urls": {
+    "indexed": "http://127.0.0.1:8090",
+    "lexical_only": "http://127.0.0.1:8091",
+    "no_index": "http://127.0.0.1:8092",
+    "xss_fixture": "http://127.0.0.1:8093"
+  },
+  "screenshot_count": 21,
+  "screenshots": [
+    {
+      "screenshot": "01-indexed-idle.png",
+      "bytes": 185646,
+      "sha256": "893d4211bd7f03a0622c735a7f69973cd6f4f270dc8247ed89d2c0b7dd58331d"
+    },
+    {
+      "screenshot": "02-first-semantic-loading.png",
+      "bytes": 217979,
+      "sha256": "34db62edf9dde60beb345ab367009af1d2469eb8d657e1437c661bd27af009ef"
+    },
+    {
+      "screenshot": "03-semantic-float-results.png",
+      "bytes": 239292,
+      "sha256": "b9ec2d13ff9d23a28228f8c77a352c4affb0508144363a3fdf14c86ed4f7e23d"
+    },
+    {
+      "screenshot": "04-keyword-results.png",
+      "bytes": 177003,
+      "sha256": "5c488c5879a23815927317ff5663c0048eca6e908473fa58454a3a178116497a"
+    },
+    {
+      "screenshot": "05-semantic-int8-results.png",
+      "bytes": 238628,
+      "sha256": "0e232fd43e84c705aee1e9c6a86ffb47f83bf38df9a2b86006a01c0bbd355917"
+    },
+    {
+      "screenshot": "06-semantic-binary-results.png",
+      "bytes": 241456,
+      "sha256": "906e42416c26fb3c5c0220e5ff6f291dfb20150b2f83f962da744036d3c7d00b"
+    },
+    {
+      "screenshot": "07-hybrid-float-results.png",
+      "bytes": 238652,
+      "sha256": "d283c972ec921e5f4e54f311e0999dc1c716b346b39cc567aa4d6c16a9c19d59"
+    },
+    {
+      "screenshot": "08-hybrid-int8-results.png",
+      "bytes": 241473,
+      "sha256": "292082c9ed6cac95b9602519b846aa8a6380e217a094fa7af5b3666eed0882c1"
+    },
+    {
+      "screenshot": "09-hybrid-binary-results.png",
+      "bytes": 239384,
+      "sha256": "8bc30ee92d272e10c8f85fe79ea9153f6783169f689c3467d8d957d2bf7000ed"
+    },
+    {
+      "screenshot": "10-no-results.png",
+      "bytes": 179735,
+      "sha256": "5eed36f0e47858bda5d3a3c2d23d21e973a68873da9c9bef7af9b0e3b6ef0a46"
+    },
+    {
+      "screenshot": "11-results-k5.png",
+      "bytes": 176950,
+      "sha256": "567fc0edbeaaa7d933dc171b50053536f3086626ec2b5b671f68399be3fdc0f2"
+    },
+    {
+      "screenshot": "12-results-k30.png",
+      "bytes": 177008,
+      "sha256": "6a7c4b204c5df9f1bb9de08709128c4cdadcd1f43400730bf6cbd1a2553ccf5a"
+    },
+    {
+      "screenshot": "13-shareable-url-state.png",
+      "bytes": 217341,
+      "sha256": "c17ee933dfb3d9fffeea27c47cd5d0d510c53b20f53e5326ffdc8744a40fee72"
+    },
+    {
+      "screenshot": "14-dark-hybrid-results.png",
+      "bytes": 245852,
+      "sha256": "41dfeb0a938be0be93d42ec396a5539a3cf213a50429329dbe9b6500244e4388"
+    },
+    {
+      "screenshot": "15-mobile-hybrid-results.png",
+      "bytes": 130925,
+      "sha256": "61a4b997f6831c4bd91ac19a21a44219658e9df2a3e25aaa2b9fe9c1e16b5553"
+    },
+    {
+      "screenshot": "16-lexical-only-capabilities.png",
+      "bytes": 180887,
+      "sha256": "77c672325d20e5a82333372020a11669462958d140f9f215102b3fdeb1b76250"
+    },
+    {
+      "screenshot": "17-lexical-only-results.png",
+      "bytes": 176988,
+      "sha256": "f026995aaf7b35c5b4e47f71f1e7b26bbd33f56b68619a9176f3b9de5e4654b5"
+    },
+    {
+      "screenshot": "18-no-index.png",
+      "bytes": 176984,
+      "sha256": "22e4517773e370d87492ab873661c4c1591c22f28f99b2c03956786a76f97da3"
+    },
+    {
+      "screenshot": "19-network-error.png",
+      "bytes": 186083,
+      "sha256": "9d6a51026dd4ba45f7e5242099ef6d366526848f734702c0e436494396db7de6"
+    },
+    {
+      "screenshot": "20-validation-error.png",
+      "bytes": 186325,
+      "sha256": "8135ace2976a5fb1400754de3bc4cf206235f095ffb9e655aacebf77890d284d"
+    },
+    {
+      "screenshot": "21-xss-rendered-as-text.png",
+      "bytes": 177260,
+      "sha256": "bd2ec22f94b4873d474072faf1f95032698df7248eb631efa56c1c1ecc42e8b1"
+    }
+  ],
+  "assertions": [
+    {
+      "check": "indexed idle and capabilities",
+      "status": "passed",
+      "detail": "default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' data:; connect-src 'self'; object-src 'none'; base-uri 'none'; frame-ancestors 'none'; form-action 'self'"
+    },
+    {
+      "check": "first semantic lazy-load and float result",
+      "status": "passed",
+      "detail": ""
+    },
+    {
+      "check": "keyword",
+      "status": "passed",
+      "detail": "expected result contains photosynthesis.md"
+    },
+    {
+      "check": "semantic-int8",
+      "status": "passed",
+      "detail": "expected result contains sourdough.md"
+    },
+    {
+      "check": "semantic-binary",
+      "status": "passed",
+      "detail": "expected result contains pottery-glaze"
+    },
+    {
+      "check": "hybrid-float",
+      "status": "passed",
+      "detail": "expected result contains emergency-fund"
+    },
+    {
+      "check": "hybrid-int8",
+      "status": "passed",
+      "detail": "expected result contains compost"
+    },
+    {
+      "check": "hybrid-binary",
+      "status": "passed",
+      "detail": "expected result contains vector-embeddings"
+    },
+    {
+      "check": "no-result state",
+      "status": "passed",
+      "detail": ""
+    },
+    {
+      "check": "result count controls",
+      "status": "passed",
+      "detail": "5, 10, 20, 30"
+    },
+    {
+      "check": "shareable URL state",
+      "status": "passed",
+      "detail": ""
+    },
+    {
+      "check": "dark color scheme",
+      "status": "passed",
+      "detail": ""
+    },
+    {
+      "check": "mobile responsive layout",
+      "status": "passed",
+      "detail": "430x932 touch viewport"
+    },
+    {
+      "check": "lexical-only capability restrictions and search",
+      "status": "passed",
+      "detail": ""
+    },
+    {
+      "check": "no-index state and disabled controls",
+      "status": "passed",
+      "detail": ""
+    },
+    {
+      "check": "network failure error state",
+      "status": "passed",
+      "detail": ""
+    },
+    {
+      "check": "422 validation error state",
+      "status": "passed",
+      "detail": ""
+    },
+    {
+      "check": "untrusted HTML rendered inert",
+      "status": "passed",
+      "detail": "no executable img/script nodes"
+    }
+  ],
+  "browser_console_errors": {},
+  "expected_browser_console_errors": {
+    "network-error": [
+      "console.error: Failed to load resource: net::ERR_INTERNET_DISCONNECTED"
+    ],
+    "validation-error": [
+      "console.error: Failed to load resource: the server responded with a status of 422 (Unprocessable Content)"
+    ]
+  },
+  "status": "passed",
+  "chrome_executable": "C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe"
+}

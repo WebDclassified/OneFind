@@ -24,16 +24,16 @@ If you have a question you cannot answer after reading this document and the sou
 
 ## Section 0: The Project at a Glance
 
-**The claim we are testing.** A recently published paper, *SQLite is Enough: Lexical, Semantic, and Hybrid Search with OneFind*, claims that a single SQLite database file is enough to deliver production-quality hybrid retrieval (lexical + semantic search, fused). The claim is disruptive because the standard architecture requires a separate vector database, a separate lexical index, and an orchestration layer.
+**The claim we are testing.** A recently published paper, *SQLite is Enough: Lexical, Semantic, and Hybrid Search with scrydb*, claims that a single SQLite database file is enough to deliver production-quality hybrid retrieval (lexical + semantic search, fused). The claim is disruptive because the standard architecture requires a separate vector database, a separate lexical index, and an orchestration layer.
 
 **The project.** Reimplement the OneFind system from the paper, run it on two standard information-retrieval benchmarks, document any deviations, and conduct one independent extension experiment.
 
-**What we built.** A Python library, a CLI, a FastAPI web demo, a 67-test test suite, four published evaluation reports, and seven living spec documents. All in 12 clean commits.
+**What we built.** A Python library, a lowercase cross-platform CLI, a packaged FastAPI web UI, a 112-test suite, a 20-document/26-query smoke corpus, reproducible evaluation manifests, and seven living specification documents. The original phase history was followed by a v1.1 correctness and release-hardening pass.
 
 **What we found.**
-- The paper's central claim reproduces under our scaled-down model. All qualitative findings hold.
+- Hybrid improves over the best single mode on both corrected datasets, while int8 stays close to float and binary trades quality for compact configuration math. Pure-cosine reranking does not improve these runs.
 - The paper's toolchain (`sqlite-vec` 0.1.9) has a limitation that is not discussed in the paper: it declares `int8[n]` and `bit[n]` vector columns but rejects all int8/bit inputs. This is the project's most interesting finding.
-- The paper's default fusion (RRF) is robust across datasets; a weighted linear alternative ties it on SciFact but loses to it by 0.002 nDCG on NFCorpus.
+- Corrected linear fusion and RRF are effectively tied: each best linear result is only 0.0004 nDCG above RRF in these single runs, so RRF stays as the simpler default.
 
 ---
 
@@ -52,7 +52,7 @@ We did not pick a paper because it was "easy" or because the field was "hot". We
 
 ### Phase 0 (foundation): 1–2 days
 
-We set up the project skeleton: a six-document specification system (PRD, Technical Design, App Flow, UI/UX Brief, Backend Design, Engineering Plan), a `pyproject.toml` with a CLI entry point, a sample corpus, a `OneFind check` command for environment proof, and a CI workflow.
+We set up the project skeleton: a six-document specification system (PRD, Technical Design, App Flow, UI/UX Brief, Backend Design, Engineering Plan), a `pyproject.toml` with a CLI entry point, a sample corpus, a `onefind check` command for environment proof, and a CI workflow.
 
 The environment-proof step is the first engineering discipline of the project: before any code is written, we prove that the runtime can host the work. The proof caught one real issue (FTS5 schema-qualified names in `bm25()`) before the lexical engine was built on top of it.
 
@@ -64,7 +64,7 @@ We built the lexical engine: a SQLite schema with documents, chunks, FTS5, and s
 
 ### Phase 2 (semantic): 2–3 days
 
-We added the semantic engine: a SentenceEmbedder wrapper, three storage precisions (float, int8, binary), and a search dispatch. This phase produced the project's most interesting finding (ADR-7): the `sqlite-vec` 0.1.9 wheel rejects all int8/bit inputs. We documented the finding, recorded the workaround, and moved on.
+We added the semantic engine: a CPU SentenceEmbedder wrapper, native sqlite-vec float KNN, and application-side int8/binary ranking. This phase produced the project's most interesting toolchain finding (ADR-7): the `sqlite-vec` 0.1.9 wheel rejects all int8/bit inputs. The v1.1 implementation streams quantized comparisons in bounded blocks and keeps only one float vector table.
 
 **Key discipline**: empirical probing before code. We tested the `sqlite-vec` library's int8/bit behavior with a tiny standalone script *before* writing the implementation, which saved days of debugging against a misbehaving library.
 
@@ -82,15 +82,15 @@ We wrote the evaluation harness: BEIR dataset acquisition (parquet + qrels TSV v
 
 ### Phase 5 (review + extension): 1–2 days
 
-We did a self review pass (T-09) and an extension experiment (T-10). The extension is a weighted linear-fusion alternative to RRF, swept across `α ∈ {0, 0.1, …, 1.0}`. The result: RRF and linear tie on SciFact; RRF wins on NFCorpus by 0.002 nDCG.
+We did an initial self review (T-09) and a linear-fusion extension (T-10), then a separate v1.1 review corrected BM25 direction, rerank scoring, clean installation, evaluation isolation, and UI safety. The corrected sweep finds no meaningful single-run winner: linear leads RRF by 0.0004 on each dataset.
 
-**Key discipline**: the extension is a parameter sweep, not a new method. The contribution is the conclusion (RRF is more robust) and the evidence (two datasets, controlled experiment), not the algorithm.
+**Key discipline**: the extension is a parameter sweep, not a new algorithm. The contribution is the controlled comparison and the decision to retain RRF for simplicity when measured differences are negligible.
 
 ### Phase 6 (demo + publish): 1–2 days
 
 We built the FastAPI-based localhost web demo and polished the README and report. The demo implements every UI state specified in the design brief (loading, empty, no-results, error, results, info). The README is structured to satisfy both GitHub visitors and engineering evaluators.
 
-**Key discipline**: the demo is a real-time system, not a video. A reviewer can run `OneFind serve` and interact with the system, which is the strongest possible demonstration that the project works.
+**Key discipline**: the demo is a real-time system, not a video. A reviewer can run `onefind serve` and interact with the system, which is the strongest possible demonstration that the project works.
 
 ---
 
@@ -144,7 +144,7 @@ You do not need to know every line of code. You need to know what each phase acc
 
 ### Phase 0 — Foundation
 
-**What we built.** A package skeleton, a six-document specification, a sample corpus, and a `OneFind check` command that verifies the runtime environment.
+**What we built.** A package skeleton, a six-document specification, a sample corpus, and a `onefind check` command that verifies the runtime environment.
 
 **Key trade-off.** Lightweight dependencies (no PyTorch until you ask for it). The base install is `pip install -e .`; the `[model]` extra pulls in sentence-transformers. This means a fresh machine can verify the environment in seconds, without waiting for a 200 MB download.
 
@@ -164,25 +164,25 @@ You do not need to know every line of code. You need to know what each phase acc
 
 **What we built.** Reciprocal Rank Fusion with k=60 and deterministic tie-breaking; an optional full-precision cosine rerank of the fused candidate pool.
 
-**Key trade-off.** Leg depth = k. The hybrid system retrieves k documents from each leg (lexical and semantic) and fuses them. A deeper leg depth might raise recall at higher latency, but the engineering plan kept V1 simple.
+**Key trade-off.** Standard hybrid uses leg depth `k`. Reranking retrieves 50 candidates per leg by default, fuses the complete union, and then applies pure cosine. Corrected measurements show that this reranker can discard useful lexical-only evidence, so it remains optional.
 
 ### Phase 4 — Evaluation Harness
 
 **What we built.** A dataset loader that reads BEIR parquet and qrels TSV files, an 8-configuration runner, ranx-based metric computation, a per-query latency measurement, and a markdown report writer. Two real evaluation runs: SciFact and NFCorpus.
 
-**Key trade-off.** Two datasets instead of the paper's eight. Touché (382K docs) and TREC-COVID (171K) are out of V1 scope; the harness supports them via registry. The two we chose are small enough to embed on CPU in under five minutes and span different retrieval domains (fact-checking and biomedical).
+**Key trade-off.** Two datasets instead of the paper's larger scope. Touché and TREC-COVID are out of V1 scope. The built-in registry contains SciFact and NFCorpus; another compatible dataset can be supplied as a local folder. The two built-in datasets are small enough for CPU evaluation and span fact-checking and biomedical retrieval.
 
 ### Phase 5 — Review and Extension
 
 **What we built.** A self review pass that recorded what was checked, what changed, and what was intentionally left alone. An independent extension that compared RRF against a weighted linear alternative across `α ∈ {0, 0.1, …, 1.0}`.
 
-**Key trade-off.** The extension is a parameter sweep, not a new algorithm. The contribution is the conclusion (RRF is more robust) and the evidence (two datasets, controlled experiment).
+**Key trade-off.** The extension is a parameter sweep, not a new algorithm. The contribution is the controlled comparison: linear and RRF are effectively tied, so simplicity determines the default.
 
 ### Phase 6 — Demo and Publish
 
-**What we built.** A FastAPI-based localhost web application with three JSON endpoints (`/api/stats`, `/api/search`, `/api/reset`) and a single-page HTML application that implements every UI state specified in the design brief. A polished README and a complete formal report.
+**What we built.** A FastAPI localhost application with stats/search/health endpoints and a packaged HTML/CSS/JavaScript UI. It implements explicit idle/loading/result/empty/no-index/error states, capability-aware controls, safe text rendering, a strict CSP, and reset disabled unless explicitly enabled.
 
-**Key trade-off.** Vanilla JavaScript in the front-end. No build step, no node_modules, no framework. A reviewer can run `OneFind serve` and interact with the system immediately.
+**Key trade-off.** Vanilla JavaScript in the front-end. No build step, no node_modules, no framework. A reviewer can run `onefind serve` and interact with the system immediately.
 
 ---
 
@@ -238,15 +238,15 @@ Practice this on your own machine before the defense.
 ### 7.1 Build the index (if not already done)
 
 ```bash
-OneFind eval scifact --db data/scifact.db
+onefind eval scifact --db data/scifact.db
 ```
 
-This takes 2–3 minutes. It downloads the BEIR dataset, embeds all 5,183 documents, and writes a report. Do not skip this step on the day of the defense.
+Runtime varies substantially by CPU because embedding 5,183 documents is the dominant cold-start cost. Run it well before the defense and reuse the generated database for the live demo.
 
 ### 7.2 Start the server
 
 ```bash
-OneFind serve --db data/scifact.db --port 8080
+onefind serve --db data/scifact.db --port 8080
 ```
 
 The server prints a message confirming it is listening. Open a browser to `http://127.0.0.1:8080/`.
@@ -257,7 +257,7 @@ Walk through the following states. Each one is a different part of the design br
 
 | State | How to trigger it |
 |---|---|
-| Empty (no index) | Use a non-existent db path: `OneFind serve --db nonexistent.db --port 8080` |
+| Empty (no index) | Use a non-existent db path: `onefind serve --db nonexistent.db --port 8080` |
 | Empty (index but no query) | Open the UI; the page renders with an empty query box |
 | Loading | Type a query and submit; for the first semantic query, loading takes ~1 second |
 | Results (lexical) | Query "vitamin C supplementation" with mode = lexical |
@@ -272,7 +272,7 @@ Walk through the following states. Each one is a different part of the design br
 pytest
 ```
 
-Expected: 67 tests pass in about 90 seconds. If the test suite is slow, mention that the model load is the dominant cost and happens once per session.
+Expected: 112 tests pass in about 90 seconds. If the test suite is slow, mention that the model load is the dominant cost and happens once per session.
 
 ### 7.5 Show the reports
 
@@ -309,14 +309,14 @@ A complete list is in `VIVA_QUESTIONS.md`. The most likely questions for you to 
 
 ### Q: How many tests are there?
 
-> "67 tests across 9 modules. They cover the environment proof, ingest, lexical search, semantic search, hybrid search, the alpha-sweep extension, the evaluation harness, and the FastAPI demo."
+> "112 tests across 15 modules. They cover environment checks, ingest identities, BM25 direction, model-free fusion math, fake-model vector consistency, native/quantized semantic search, rerank scores and candidate pools, the evaluation harness, gold-query smoke tests, and the packaged FastAPI UI."
 
 ### Q: Show me the search query.
 
-> Open `src/OneFind/search.py` and walk through the BM25 query, explaining:
+> Open `src/onefind/search.py` and walk through the BM25 query, explaining:
 > - `-bm25(fts)` makes "higher is better" (semantic uses the same convention)
-> - `snippet(fts, -1, '[', ']', ' … ', 12)` produces highlighted snippets
-> - `ORDER BY score ASC, doc_id ASC` ensures determinism
+> - `snippet(fts, -1, '', '', ' … ', 12)` produces private-delimiter highlight segments
+> - `ORDER BY score DESC, doc_id ASC` returns strongest matches first and breaks ties deterministically
 
 ---
 
@@ -386,15 +386,15 @@ A 5-day preparation plan that should leave you confident for the defense.
 1. Clone the repo (or use the existing one).
 2. Run the setup steps in `HOW_TO_RUN.md` (Section 1–4).
 3. Run the test suite.
-4. Run the SciFact evaluation (this takes 2–3 minutes).
+4. Run the SciFact evaluation well before the demo; cold CPU embedding is the dominant cost and runtime varies by machine.
 5. Start the demo server, run a few queries, stop the server.
 
 ### Day 3: Read the code (120 min)
 
-1. Read `src/OneFind/store.py` (the data model).
-2. Read `src/OneFind/search.py` (the search modes).
-3. Read `src/OneFind/embed.py` (the embedder and quantizers).
-4. Read `src/OneFind/evaluate.py` (the evaluation harness).
+1. Read `src/onefind/store.py` (the data model).
+2. Read `src/onefind/search.py` (the search modes).
+3. Read `src/onefind/embed.py` (the embedder and quantizers).
+4. Read `src/onefind/evaluate.py` (the evaluation harness).
 5. Skim the other modules.
 
 ### Day 4: Practice defending (90 min)
@@ -456,12 +456,13 @@ Print this card and bring it to the defense.
 │  HEADLINE:  hybrid nDCG@10 = 0.6568 on SciFact          │
 │                                                         │
 │  COMMANDS                                                │
-│    OneFind check [--full]                                │
-│    OneFind index <path> --db X --embed                    │
-│    OneFind search "Q" --db X --mode {lex|sem|hyb}        │
-│    OneFind eval <dataset> --db X                          │
-│    OneFind sweep-alpha <dataset> --db X                   │
-│    OneFind serve --db X --port 8080                       │
+│    onefind check [--full]                                │
+│    onefind index <path> --db X --embed                    │
+│    onefind search "Q" --db X --mode {lex|sem|hyb}        │
+│    onefind eval <dataset> --db X                          │
+│    onefind sweep-alpha <dataset> --db X                   │
+│    onefind smoke --db X --queries gold.jsonl              │
+│    onefind serve --db X --port 8080                       │
 │    pytest                                                │
 │                                                         │
 │  ADRs to remember                                        │
@@ -473,14 +474,14 @@ Print this card and bring it to the defense.
 │                                                         │
 │  KEY NUMBERS                                             │
 │    SciFact hybrid float  = 0.6568                       │
-│    NFCorpus hybrid float = 0.3249                       │
-│    SciFact int8 == float (identical)                    │
-│    RRF wins by 0.002 on NFCorpus                        │
+│    NFCorpus hybrid float = 0.3466                       │
+│    SciFact int8 = 0.6465; float = 0.6451                │
+│    Linear and RRF differ by only 0.0004                 │
 │                                                         │
 │  FILES TO REMEMBER                                       │
 │    docs/02 ADR records                                  │
 │    docs/06 engineering plan                             │
-│    src/OneFind/{store,search,embed,evaluate,serve}.py    │
+│    src/onefind/{store,search,embed,evaluate,serve}.py    │
 │    benchmarks/reports/*.md                              │
 │                                                         │
 │  IF ASKED "I don't know":                               │
@@ -500,10 +501,10 @@ Use this list on the day of the defense.
 - [ ] Laptop fully charged; power cable packed.
 - [ ] Project repo cloned and working directory ready.
 - [ ] `pip install -e ".[model,eval,serve]"` already run (no install delays).
-- [ ] `OneFind check` passes (or you have a story about why it doesn't).
+- [ ] `onefind check` passes (or you have a story about why it doesn't).
 - [ ] `data/scifact.db` is built (no need to re-run the full eval on the day).
 - [ ] `data/nfcorpus.db` is built.
-- [ ] `OneFind serve` starts cleanly on port 8080.
+- [ ] `onefind serve` starts cleanly on port 8080.
 - [ ] `pytest` passes.
 - [ ] Browser bookmarked to `http://127.0.0.1:8080/`.
 - [ ] Markdown reports open in a viewer for quick reference.

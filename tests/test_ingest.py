@@ -5,7 +5,7 @@ import sqlite3
 import pytest
 
 from onefind.ingest import ingest_path
-from onefind.errors import CorpusNotFoundError
+from onefind.errors import CorpusNotFoundError, DataError
 from onefind.store import Index
 
 SAMPLE = "sample-data"
@@ -19,12 +19,12 @@ def db_path(tmp_path):
 def test_counts_match_input_files(db_path):
     with Index.open(db_path) as idx:
         stats = ingest_path(idx, SAMPLE)
-    assert stats["files_indexed"] == 4
-    assert stats["total_documents"] == 4
+    assert stats["files_indexed"] == 20
+    assert stats["total_documents"] == 20
     with Index.open(db_path) as idx:
-        assert idx.count("documents") == 4
-        assert idx.count("fts") == 4
-        assert idx.count("chunks") == 4
+        assert idx.count("documents") == 20
+        assert idx.count("fts") == 20
+        assert idx.count("chunks") == 20
 
 
 def test_reindex_is_idempotent(db_path):
@@ -34,7 +34,7 @@ def test_reindex_is_idempotent(db_path):
         ingest_path(idx, SAMPLE)
         second_stats = idx.stats()
     assert first_stats == second_stats
-    assert first_stats["documents"] == 4
+    assert first_stats["documents"] == 20
 
 
 def test_missing_folder_raises_data_error(db_path):
@@ -67,3 +67,55 @@ def test_partial_batch_failure_leaves_db_openable(db_path, tmp_path):
 
     with Index.open(db_path) as reopened:  # must open cleanly
         assert reopened.count("documents") == 256  # exactly the first batch
+
+
+def test_nested_same_stems_and_mixed_suffixes_are_unique(db_path, tmp_path):
+    corpus = tmp_path / "nested"
+    (corpus / "a").mkdir(parents=True)
+    (corpus / "b").mkdir()
+    (corpus / "a" / "notes.md").write_text("# A\nalpha", encoding="utf-8")
+    (corpus / "b" / "notes.md").write_text("# B\nbeta", encoding="utf-8")
+    (corpus / "notes.txt").write_text("plain text without a heading", encoding="utf-8")
+
+    with Index.open(db_path) as index:
+        stats = ingest_path(index, corpus)
+        ids = {
+            row[0]
+            for row in index.conn.execute("SELECT doc_id FROM documents")
+        }
+
+    assert stats["files_indexed"] == 3
+    assert ids == {"a/notes.md", "b/notes.md", "notes.txt"}
+
+
+def test_jsonl_ingest_preserves_explicit_ids(db_path, tmp_path):
+    corpus = tmp_path / "corpus.jsonl"
+    corpus.write_text(
+        '{"_id":"d1","title":"First","text":"alpha"}\n'
+        '{"id":"d2","body":"beta","metadata":{"topic":"test"}}\n',
+        encoding="utf-8",
+    )
+    with Index.open(db_path) as index:
+        stats = ingest_path(index, corpus)
+        row = index.conn.execute(
+            "SELECT title, source, meta_json FROM documents WHERE doc_id='d2'"
+        ).fetchone()
+    assert stats["files_indexed"] == 2
+    assert row["title"] == "d2"
+    assert "d2" in row["source"]
+    assert "test" in row["meta_json"]
+
+
+@pytest.mark.parametrize(
+    "content,message",
+    [
+        ('{"_id":"d1"}\n', "no text/body"),
+        ('{"_id":"d1","text":"a"}\n{"_id":"d1","text":"b"}\n', "duplicate"),
+        ("not-json\n", "invalid JSON"),
+    ],
+)
+def test_jsonl_ingest_rejects_malformed_rows(db_path, tmp_path, content, message):
+    corpus = tmp_path / "bad.jsonl"
+    corpus.write_text(content, encoding="utf-8")
+    with Index.open(db_path) as index, pytest.raises(DataError, match=message):
+        ingest_path(index, corpus)

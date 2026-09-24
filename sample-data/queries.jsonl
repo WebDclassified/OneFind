@@ -1,0 +1,26 @@
+{"query":"chlorophyll photosynthesis","relevant":["photosynthesis.md"],"category":"lexical","mode":"lexical"}
+{"query":"vitamin C oranges","relevant":["citrus-vitamin-c.md"],"category":"lexical","mode":"lexical"}
+{"query":"wild yeast starter culture","relevant":["sourdough.md"],"category":"lexical","mode":"lexical"}
+{"query":"foam midsole cushioning","relevant":["running-shoes.md"],"category":"lexical","mode":"lexical"}
+{"query":"chainring cassette derailleur","relevant":["transport/bicycle-gearing.md"],"category":"lexical","mode":"lexical"}
+{"query":"emergency fund expenses","relevant":["finance/emergency-fund.md"],"category":"lexical","mode":"lexical"}
+{"query":"ii V I turnaround substitution","relevant":["music/jazz-turnarounds.md"],"category":"lexical","mode":"lexical"}
+{"query":"library due date renewal overdue","relevant":["operations/library-loans.md"],"category":"lexical","mode":"lexical"}
+{"query":"circadian rhythm sleep timing","relevant":["health/circadian-rhythm.md"],"category":"lexical","mode":"lexical"}
+{"query":"compost carbon nitrogen moisture","relevant":["environment/compost.md"],"category":"lexical","mode":"lexical"}
+{"query":"adiabatic cooling condensation nuclei","relevant":["science/cloud-formation.md"],"category":"lexical","mode":"lexical"}
+{"query":"captions speaker non-speech sounds","relevant":["technology/captioning-accessibility.md"],"category":"lexical","mode":"lexical"}
+{"query":"legume crop rotation nitrogen","relevant":["agriculture/crop-rotation.md"],"category":"lexical","mode":"hybrid"}
+{"query":"galvanic corrosion sacrificial zinc","relevant":["materials/rust-prevention.md"],"category":"lexical","mode":"lexical"}
+{"query":"triangulated geodesic dome circumradius","relevant":["architecture/geodesic-dome.md"],"category":"lexical","mode":"lexical"}
+{"query":"archive export checksums","relevant":["archive/plan.md"],"category":"disambiguation","mode":"lexical"}
+{"query":"allotment volunteers compost watering","relevant":["notes/plan.md"],"category":"disambiguation","mode":"lexical"}
+{"query":"limpets desiccation intertidal zone","relevant":["life/tide-pool-adaptations.md"],"category":"lexical","mode":"hybrid"}
+{"query":"cone 6 glaze vitrification flux","relevant":["craft/pottery-glaze.txt"],"category":"lexical","mode":"lexical"}
+{"query":"dense vectors cosine similarity","relevant":["technology/vector-embeddings.md"],"category":"lexical","mode":"hybrid"}
+{"query":"how plants turn sunlight into food","relevant":["photosynthesis.md"],"category":"semantic","mode":"semantic"}
+{"query":"money buffer for a surprise car repair","relevant":["finance/emergency-fund.md"],"category":"semantic","mode":"semantic"}
+{"query":"representing words as numbers for meaning-based lookup","relevant":["technology/vector-embeddings.md"],"category":"semantic","mode":"semantic"}
+{"query":"creatures that survive being exposed at low tide","relevant":["life/tide-pool-adaptations.md"],"category":"semantic","mode":"semantic"}
+{"query":"ceramic surface that melts in a kiln","relevant":["craft/pottery-glaze.txt"],"category":"semantic","mode":"semantic"}
+{"query":"asdfqwer nonexistentterm","relevant":[],"category":"no-answer","mode":"lexical"}

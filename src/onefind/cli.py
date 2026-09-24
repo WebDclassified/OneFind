@@ -12,7 +12,7 @@ import sys
 
 from . import __version__
 from .envcheck import collect_check
-from .errors import ScrydbError, UsageError
+from .errors import OneFindError, UsageError
 
 EXIT_OK = 0
 EXIT_USAGE = 2
@@ -23,7 +23,7 @@ def _print_human(report: dict) -> None:
     def flag(ok: bool) -> str:
         return "OK  " if ok else "FAIL"
 
-    print("OneFind check")
+    print("onefind check")
     print(f"  python     : {report['python']}")
     print(f"  sqlite     : {report['sqlite']['version']}")
     print(f"  fts5       : {flag(report['sqlite']['fts5']['ok'])} {report['sqlite']['fts5']['detail']}")
@@ -47,7 +47,10 @@ def cmd_check(args: argparse.Namespace) -> int:
         print(json.dumps(report, indent=2))
     else:
         _print_human(report)
-    return EXIT_OK if report["ok"] else EXIT_ENV
+    passed = report["ok"]
+    if args.full and report["model"].get("status") == "error":
+        passed = False
+    return EXIT_OK if passed else EXIT_ENV
 
 
 def cmd_eval(args: argparse.Namespace) -> int:
@@ -55,7 +58,7 @@ def cmd_eval(args: argparse.Namespace) -> int:
 
     report = run_eval(
         args.dataset,
-        db=args.db,
+        db=args.db or f"data/{args.dataset}.db",
         k=args.k,
         max_docs=args.max_docs,
         limit_queries=args.limit_queries,
@@ -84,6 +87,26 @@ def cmd_sweep_alpha(args: argparse.Namespace) -> int:
         out_dir=args.out,
     )
     print(f"done -> {report}")
+    return EXIT_OK
+
+
+def cmd_smoke(args: argparse.Namespace) -> int:
+    from .evaluate import run_smoke
+
+    result = run_smoke(
+        args.db,
+        args.queries,
+        k=args.k,
+        model_name=args.model,
+    )
+    print(f"smoke cases       : {result['cases']}")
+    print(f"answerable cases  : {result['answerable']}")
+    print(f"hit@3             : {result['hit_at_3']:.3f}")
+    print(f"MRR@{args.k}          : {result['mrr_at_k']:.3f}")
+    print(f"no-answer accuracy: {result['no_answer_accuracy']:.3f}")
+    for row in result["rows"]:
+        outcome = "—" if row["rank"] is None else str(row["rank"])
+        print(f"  {row['mode']:<8} rank={outcome:>2}  {row['query']}")
     return EXIT_OK
 
 
@@ -117,7 +140,16 @@ def cmd_index(args: argparse.Namespace) -> int:
 
 def _print_hits(hits) -> None:
     for rank, hit in enumerate(hits, start=1):
-        snippet_one_line = " ".join(hit.snippet.split()) if hit.snippet else ""
+        snippet_one_line = (
+            " ".join(
+                hit.snippet.replace("", "[")
+                .replace("", "]")
+                .replace("…", "...")
+                .split()
+            )
+            if hit.snippet
+            else ""
+        )
         print(f"{rank:>2}. [{hit.score:.4f}] {hit.doc_id} - {hit.title}")
         if snippet_one_line:
             print(f"    {snippet_one_line[:120]}")
@@ -137,7 +169,7 @@ def cmd_search(args: argparse.Namespace) -> int:
             model_name = index.get_meta("model_name")
             if model_name is None:
                 raise UsageError(
-                    "this index has no embeddings; rebuild with 'OneFind index --embed'"
+                    "this index has no embeddings; rebuild with 'onefind index --embed'"
                 )
             print(f"loading embedding model: {model_name} ...")
             from .embed import SentenceEmbedder
@@ -147,18 +179,37 @@ def cmd_search(args: argparse.Namespace) -> int:
             index, args.query, mode=args.mode, k=args.k,
             precision=args.precision, rrf_k=args.rrf_k, rerank=args.rerank,
             fusion=args.fusion, alpha=args.alpha,
+            candidate_depth=args.candidate_depth,
         )
     _print_hits(hits)
     return EXIT_OK
 
 
 def cmd_serve(args: argparse.Namespace) -> int:
-    import uvicorn
+    loopback_hosts = {"127.0.0.1", "localhost", "::1"}
+    if args.host not in loopback_hosts and not args.allow_remote:
+        raise UsageError(
+            f"refusing to expose the unauthenticated demo on {args.host}; "
+            "use --allow-remote only behind a trusted firewall or reverse proxy"
+        )
+    try:
+        import uvicorn
+    except ImportError as exc:
+        raise UsageError('serve needs the [serve] extra - pip install -e ".[serve]"') from exc
 
     from .serve import create_app
 
-    app = create_app(args.db, reset_token=args.reset_token)
-    print(f"OneFind serving on http://{args.host}:{args.port} (db: {args.db})")
+    allowed_hosts = (
+        ["localhost", "127.0.0.1", "::1"]
+        if args.host in {"localhost", "127.0.0.1", "::1"}
+        else ["*"]
+    )
+    app = create_app(
+        args.db,
+        reset_token=args.reset_token,
+        allowed_hosts=allowed_hosts,
+    )
+    print(f"onefind serving on http://{args.host}:{args.port} (db: {args.db})")
     uvicorn.run(app, host=args.host, port=args.port, log_level=args.log_level)
     return EXIT_OK
 
@@ -169,8 +220,8 @@ def _not_yet(phase_hint: str) -> int:
 
 
 def build_parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(prog="OneFind", description=__doc__)
-    parser.add_argument("--version", action="version", version=f"OneFind {__version__}")
+    parser = argparse.ArgumentParser(prog="onefind", description=__doc__)
+    parser.add_argument("--version", action="version", version=f"onefind {__version__}")
     sub = parser.add_subparsers(dest="command", required=True)
 
     p_check = sub.add_parser("check", help="verify SQLite FTS5 + sqlite-vec + model stack")
@@ -182,7 +233,7 @@ def build_parser() -> argparse.ArgumentParser:
 
     p_index = sub.add_parser("index", help="index a folder of .txt/.md files into a database")
     p_index.add_argument("path", help="corpus folder")
-    p_index.add_argument("--db", default="OneFind.db", help="target SQLite file (default OneFind.db)")
+    p_index.add_argument("--db", default="onefind.db", help="target SQLite file (default onefind.db)")
     p_index.add_argument(
         "--embed",
         action="store_true",
@@ -193,7 +244,7 @@ def build_parser() -> argparse.ArgumentParser:
 
     p_search = sub.add_parser("search", help="query an index")
     p_search.add_argument("query")
-    p_search.add_argument("--db", default="OneFind.db")
+    p_search.add_argument("--db", default="onefind.db")
     p_search.add_argument(
         "--mode", choices=["lexical", "semantic", "hybrid"], default="hybrid"
     )
@@ -208,6 +259,10 @@ def build_parser() -> argparse.ArgumentParser:
     p_search.add_argument(
         "--rerank", action="store_true",
         help="rescore hybrid candidates by full-precision cosine",
+    )
+    p_search.add_argument(
+        "--candidate-depth", type=int, default=50, dest="candidate_depth",
+        help="per-leg candidate depth used when --rerank is enabled (default 50)",
     )
     p_search.add_argument(
         "--fusion", choices=["rrf", "linear"], default="rrf",
@@ -249,10 +304,27 @@ def build_parser() -> argparse.ArgumentParser:
     p_sweep.add_argument("--out", default="benchmarks/reports")
     p_sweep.set_defaults(func=cmd_sweep_alpha)
 
+    p_smoke = sub.add_parser(
+        "smoke", help="evaluate JSONL gold queries against an existing local index"
+    )
+    p_smoke.add_argument("--db", required=True, help="SQLite index to test")
+    p_smoke.add_argument(
+        "--queries", default="sample-data/queries.jsonl",
+        help="JSONL cases with query, relevant, and optional mode fields",
+    )
+    p_smoke.add_argument("--k", type=int, default=5)
+    p_smoke.add_argument("--model", default=None)
+    p_smoke.set_defaults(func=cmd_smoke)
+
     p_serve = sub.add_parser("serve", help="run the local demo web app (T-11)")
     p_serve.add_argument("--db", required=True, help="SQLite index file to serve")
     p_serve.add_argument("--host", default="127.0.0.1")
     p_serve.add_argument("--port", type=int, default=8080)
+    p_serve.add_argument(
+        "--allow-remote",
+        action="store_true",
+        help="permit a non-loopback bind for the unauthenticated demo",
+    )
     p_serve.add_argument("--reset-token", default=None, dest="reset_token",
                          help="token required to POST /api/reset (random if omitted)")
     p_serve.add_argument("--log-level", default="warning", dest="log_level")
@@ -266,7 +338,7 @@ def main(argv: list[str] | None = None) -> int:
     args = parser.parse_args(argv)
     try:
         return args.func(args)
-    except ScrydbError as exc:
+    except OneFindError as exc:
         print(f"error: {exc}", file=sys.stderr)
         return exc.exit_code
 

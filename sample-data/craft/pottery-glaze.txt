@@ -1,0 +1,5 @@
+Pottery Glazing and Vitrification
+
+A ceramic glaze combines silica, fluxes, and stabilizers. During firing, the flux lowers the melting temperature so silica can partially vitrify into a glassy coating. Cone 6 is a common mid-range firing reference for many clay bodies, but the correct cone depends on the clay and intended surface.
+
+Glaze chemistry affects melt, crazing, pinholing, and color. Test tiles should record clay body, application thickness, firing schedule, and cone. A successful recipe behaves consistently; copying only the listed ingredients without those process details is unreliable.

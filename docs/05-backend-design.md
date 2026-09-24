@@ -1,77 +1,136 @@
-# 05 · Backend Design & Data Model
+# 05 · Backend and Data Model
 
-Project: OneFind reproduction · Version: v0.1 (draft) · Status: Proposed
-Storage engine: one SQLite file containing relational tables, FTS5 index, and sqlite-vec virtual tables.
+Project: OneFind · Version: 1.1 · Status: Implemented
+
+## Storage model
+
+One SQLite file contains:
+
+```text
+documents
+chunks
+fts (FTS5)
+vec_float (sqlite-vec vec0)
+schema_meta
+```
 
 ## Tables
 
-### documents
-| Field | Type / rule | Purpose |
+### `documents`
+
+| Field | Type | Purpose |
 |---|---|---|
-| doc_id | TEXT, primary key | Stable id (BEIR corpus id or sha1 of path+content) |
-| title | TEXT, not null, default '' | Display + lexical boost candidate |
-| body | TEXT, not null | Full document text |
-| source | TEXT | Origin path / dataset name |
-| meta_json | TEXT (JSON) | Extensible metadata |
-| created_at | TEXT, ISO-8601 UTC | Insertion time |
-| updated_at | TEXT, ISO-8601 UTC | Last re-index change |
+| `doc_id` | TEXT PK | Canonical corpus ID |
+| `title` | TEXT | Display and lexical text |
+| `body` | TEXT | Full document text |
+| `source` | TEXT | Relative path, JSONL source, or dataset origin |
+| `meta_json` | TEXT | Optional JSON metadata |
+| `created_at` | TEXT | UTC creation timestamp |
+| `updated_at` | TEXT | UTC update timestamp |
 
-### chunks *(schema-ready; V1 eval uses whole docs = 1 chunk per doc)*
-| Field | Type / rule | Purpose |
+File corpora use the relative path including suffix. JSONL corpora use `_id`/`id` or a deterministic line fallback. This prevents nested same-stem and same-directory extension collisions.
+
+### `chunks`
+
+One V1 chunk per document:
+
+| Field | Type | Purpose |
 |---|---|---|
-| row_id | INTEGER PRIMARY KEY AUTOINCREMENT | Join key to vec tables |
-| doc_id | TEXT FK→documents ON DELETE CASCADE, indexed | Owner |
-| seq | INTEGER | Order within doc; UNIQUE(doc_id, seq) |
-| text | TEXT not null | Chunk text |
+| `row_id` | INTEGER PK | Stable vector key |
+| `doc_id` | TEXT FK | Owning document, cascading delete |
+| `seq` | INTEGER | Chunk order |
+| `text` | TEXT | Chunk text |
 
-### fts (FTS5 virtual)
-`CREATE VIRTUAL TABLE fts USING fts5(doc_id UNINDEXED, title, body, tokenize='porter unicode61')` — BM25 ranking via `bm25()`; content synced by ingest within the same transaction as documents.
+### `fts`
 
-### vec_float / vec_int8 / vec_bit (sqlite-vec virtual, per precision)
-`USING vec0(embedding float[384] | int8[384] | bit[384])`, rowid = chunks.row_id.
-Rationale: mirrors the paper's precision configurations directly; quantized variants are written once at index time, so queries pay no conversion cost.
+Standalone FTS5 index with `doc_id UNINDEXED`, title, and body. Documents are explicitly resynchronized inside the write transaction.
 
-### schema_meta
-key/value: schema version, model name+dimension, embedding normalization flag. Open() refuses mismatched model/dimension with explicit error.
+### `vec_float`
 
-## Access matrix (single-user local tool)
-
-| Resource / action | OS user (owner) | Other processes |
-|---|---|---|
-| Read DB | Allowed | Allowed if file permissions permit (SQLite file semantics) |
-| Write/index | Allowed via CLI/API | Not supported; WAL mode enables concurrent reads during serve |
-| Delete/reset | Explicit `reset --force` only | n/a |
-
-No app-level roles exist; server-side rule = the API layer validates every parameter regardless of UI (see validation).
-
-## Library API contract (Python)
-
-```python
-idx = Index.open("x.db")                      # checks schema_meta
-idx.add_documents(iterable[Document])          # transactional batches of 256
-hits = idx.search("vitamin B12", mode="hybrid", precision="float", rerank=False, k=10)
-# hits: list[Hit(id, score, snippet)]  — deterministic tie-break by (−score, id)
+```sql
+CREATE VIRTUAL TABLE vec_float USING vec0(
+  embedding float[384] distance_metric=cosine
+);
 ```
 
-Errors raise typed exceptions: `ExtensionMissingError(3)`, `SchemaMismatchError(3)`, `EmptyQueryError(2)`, `CorpusNotFoundError(4)`.
+Float KNN is native to sqlite-vec. Int8 and binary configurations are derived from these vectors in bounded application-side blocks; there are no misleading duplicate quantized tables.
 
-## HTTP API (`OneFind serve`, localhost only)
+### `schema_meta`
 
-| Method/Path | Body → Response | Failure |
-|---|---|---|
-| POST `/api/search` | `{query, mode, precision?, k?}` → `{results[], took_ms}` | 400 invalid params; 503 index empty |
-| GET `/api/stats` | counts, db size, model name | 500 engine error |
-| POST `/api/reset` | confirm token required | 409 wrong token |
+Stores schema version, model name/revision/dimension, deterministic int8 scale, and the evaluation manifest. The opener rejects unrelated databases and unsupported schema versions before initialization DDL.
 
-Validation: query ≤512 chars after trim; k ∈ [1,50] default 10; mode/precision enums enforced server-side. Idempotency: indexing upserts by doc_id; search is naturally idempotent.
+## Write transactions
 
-## Indexes & query patterns
+Each ingest batch:
 
-- FTS5 handles lexical lookups; `chunks(doc_id)` indexed; vec tables are their own index.
-- Expected patterns: point queries by doc_id (highlighting), range scan none, joins chunks↔documents only.
+1. upserts documents;
+2. upserts stable chunks;
+3. resynchronizes FTS rows;
+4. encodes and validates vectors when an embedder is attached;
+5. deletes/replaces vector rows;
+6. commits once.
 
-## Retention, events, sensitive data
+Any exception rolls back the whole batch. Lexical-only updates to an embedded index are rejected. Model attachment backfills missing vectors.
 
-- Reset = delete `.db` file (documented); no background jobs/events/webhooks in V1.
-- Backups: copy the single file (that IS the paper's archival story).
-- Sensitive-data classification: user-supplied corpus may contain private text; README warns that `.db` files inherit it — never share without review.
+## Read paths
+
+- **Lexical:** FTS5 BM25, strongest first, document-ID tie-break.
+- **Float:** sqlite-vec cosine KNN.
+- **Int8/binary:** 2,048-row vector blocks plus a bounded top-k candidate set.
+- **Hybrid:** rank fusion over two leg results.
+- **Rerank:** one query encoding and cosine scoring over the complete fused candidate pool.
+
+SQLite `data_version` invalidates an in-process quantized cache after external writes.
+
+## Health
+
+`Index.health()` compares:
+
+- document count;
+- chunk count;
+- FTS count;
+- vector count;
+- chunks missing vectors;
+- orphan vector rows.
+
+The web stats endpoint exposes health but not the absolute index path.
+
+## Library API
+
+```python
+from onefind import Document, Index
+
+with Index.open("demo.db") as index:
+    index.add_documents([
+        Document("note-1", "A body", title="A title", source="notes/a.md")
+    ])
+    index.attach_embedder(embedder)  # optional; backfills existing chunks
+    hits = index.search(
+        "a natural-language query",
+        mode="hybrid",
+        precision="float",
+        rerank=True,
+        candidate_depth=50,
+    )
+```
+
+The same search function is also available as `onefind.search.search(index, ...)`.
+
+## HTTP API
+
+| Method/path | Contract |
+|---|---|
+| `GET /api/stats` | Readiness, capabilities, counts, size, model, health |
+| `POST /api/search` | Validated query/mode/precision/k and safe result segments |
+| `GET /health` | Service liveness |
+| `POST /api/reset` | Disabled unless explicitly enabled with a startup token |
+
+Search, model loading, and reset transitions share a lock. The API returns a stable error envelope and never exposes foreign absolute paths.
+
+## Security and privacy
+
+- FTS values use bound parameters and quoted tokens.
+- Indexed snippets are converted to text/highlight segments; the UI never treats them as HTML.
+- CSP and defensive browser headers are applied.
+- Binding is loopback by default; remote binding requires explicit acknowledgment.
+- No analytics, telemetry, or remote content requests exist.

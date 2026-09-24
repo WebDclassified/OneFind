@@ -1,5 +1,7 @@
 # T-09 — Self review pass
 
+> **Historical review.** This pass missed the BM25 direction and rerank-score defects later found in independent v1.1 review. The corrected implementation and new reports supersede its affected conclusions.
+
 Re-read of the implementation vs paper sections 2–4 and own engineering
 plan. Notes on what was checked, what changed, and what was intentionally
 left alone.

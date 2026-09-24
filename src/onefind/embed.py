@@ -5,9 +5,9 @@ lexical-only install stays light. Quantizer helpers are plain-numpy so they
 are unit-testable without downloading any model.
 
 Precision conventions (mirroring arXiv:2608.24060 configurations):
-- float : cosine distance on float32 vectors          -> vec_float
-- int8  : global-scale scalar quantization, cosine    -> vec_int8
-- binary: sign-bit packing, Hamming distance          -> vec_bit
+- float : sqlite-vec cosine KNN over float32 vectors
+- int8  : global-scale scalar quantization, application-side cosine
+- binary: sign-bit Hamming distance, application-side
 """
 
 from __future__ import annotations
@@ -31,7 +31,9 @@ class SentenceEmbedder:
                 "sentence-transformers not installed - run: pip install -e \".[model]\""
             ) from exc
         self.name = model_name
-        self.model = SentenceTransformer(model_name)
+        self.model = SentenceTransformer(model_name, device="cpu")
+        model_card = getattr(self.model, "model_card_data", None)
+        self.revision = getattr(model_card, "commit_hash", None) or "unpinned"
         get_dim = getattr(self.model, "get_embedding_dimension", None)
         self.dimension = int(
             get_dim() if get_dim is not None else self.model.get_sentence_embedding_dimension()

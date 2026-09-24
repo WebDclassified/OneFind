@@ -12,6 +12,7 @@ Two sources are supported:
 
 from __future__ import annotations
 
+import hashlib
 import json
 import urllib.request
 from pathlib import Path
@@ -29,10 +30,16 @@ _REGISTRY = {
 
 def _download(url: str, target: Path) -> None:
     target.parent.mkdir(parents=True, exist_ok=True)
-    request = urllib.request.Request(url, headers={"User-Agent": "OneFind-reproduction/0.1"})
-    with urllib.request.urlopen(request, timeout=120) as response, target.open("wb") as fh:
-        while chunk := response.read(1 << 16):
-            fh.write(chunk)
+    partial = target.with_name(target.name + ".part")
+    partial.unlink(missing_ok=True)
+    request = urllib.request.Request(url, headers={"User-Agent": "OneFind-reproduction/1.1"})
+    try:
+        with urllib.request.urlopen(request, timeout=120) as response, partial.open("wb") as handle:
+            while chunk := response.read(1 << 16):
+                handle.write(chunk)
+        partial.replace(target)
+    finally:
+        partial.unlink(missing_ok=True)
 
 
 def _find_one(folder: Path, stem: str, suffixes: tuple[str, ...]) -> Path | None:
@@ -87,6 +94,25 @@ def _rows(folder: Path, stem: str) -> list[dict]:
     if path is None:
         raise DataError(f"missing {stem} file (jsonl or parquet) under {folder}")
     return _read_parquet_rows(path) if path.suffix == ".parquet" else _read_jsonl(path)
+
+
+def dataset_fingerprint(folder: Path) -> dict[str, str]:
+    """SHA-256 fingerprint the exact corpus/query/qrels files used by a run."""
+    fingerprint: dict[str, str] = {}
+    for label, stem, suffixes in (
+        ("corpus", "corpus", (".parquet", ".jsonl")),
+        ("queries", "queries", (".parquet", ".jsonl")),
+        ("qrels", "qrels", (".tsv",)),
+    ):
+        path = _find_one(folder, stem, suffixes)
+        if path is None:
+            raise DataError(f"missing {stem} file under {folder}")
+        digest = hashlib.sha256()
+        with path.open("rb") as handle:
+            for block in iter(lambda: handle.read(1 << 20), b""):
+                digest.update(block)
+        fingerprint[label] = f"sha256:{digest.hexdigest()}"
+    return fingerprint
 
 
 def load_corpus(folder: Path) -> dict[str, dict]:

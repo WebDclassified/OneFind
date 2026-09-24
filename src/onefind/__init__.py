@@ -9,13 +9,14 @@ from .errors import (
     DataError,
     EmptyQueryError,
     EnvError,
+    OneFindError,
     ScrydbError,
     UsageError,
 )
 from .search import Hit
 from .store import Document, Index
 
-__version__ = "0.1.0"
+__version__ = "1.1.0"
 
 __all__ = [
     "CorpusNotFoundError",
@@ -25,6 +26,7 @@ __all__ = [
     "EnvError",
     "Hit",
     "Index",
+    "OneFindError",
     "ScrydbError",
     "UsageError",
     "__version__",

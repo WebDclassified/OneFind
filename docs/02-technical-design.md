@@ -1,108 +1,122 @@
-# 02 · Technical Design Document
+# 02 · Technical Design
 
-Project: OneFind reproduction · Version: v0.4 (draft) · Status: Proposed
-
-> v0.2 change: added ADR-7 — application-side int8/binary quantization after an
-> empirical finding about the installed sqlite-vec build.
-> v0.3 change: added ADR-8 — hybrid RRF defaults (fusion constant, leg depth,
-> rerank pool).
-> v0.4 change: added ADR-9 — BEIR acquisition via HuggingFace parquet + qrels
-> sibling repos; pyarrow joins via the [eval] extra.
+Project: OneFind · Version: 1.1 · Status: Implemented
 
 ## System context
 
+```text
+CLI / packaged web UI / evaluation harness
+                    │
+                    ▼
+        onefind.search dispatcher
+       lexical │ semantic │ hybrid
+          │        │         │
+        FTS5   float/int8/binary  RRF/linear
+          └────────┬────────────┘
+                   ▼
+                SQLite
+      documents · chunks · FTS5 · vec_float · metadata
 ```
-CLI / demo page          evaluation harness
-      │                        │
-      ▼                        ▼
-┌─────────────────────────────────────┐
-│ OneFind library (Python)             │
-│  ingest → embed → store             │
-│  search: lexical │ semantic │ RRF   │
-└───────────────┬─────────────────────┘
-                ▼
-   single SQLite file (FTS5 tables + sqlite-vec virtual tables + documents)
-```
 
-No runtime network dependency after the one-time embedding-model download. Everything lives in one `.db` file — the paper's core claim ("SQLite is enough") is also our architecture constraint.
+The default deployment requires no runtime network access after the model and optional datasets have been cached. All document/index content lives in one `.db` file.
 
-## Stack decisions (baseline brief)
+## Stack
 
-| Area | Decision | Reason / constraint |
+| Area | Decision | Reason |
 |---|---|---|
-| Language | Python ≥3.11, `venv`, pinned in `requirements.txt` | Matches upstream ecosystem (sentence-transformers, sqlite-vec bindings) |
-| Storage | SQLite single file: FTS5 + sqlite-vec | The paper's thesis; zero-infra; archival single-file story |
-| Embeddings | CPU-first: `all-MiniLM-L6-v2` (384-dim); optional second model if GPU found | ADR-3 |
-| Metrics | `ranx` for AP/RR/P@10/nDCG@10; custom timing wrapper | Standard IR metrics without heavy Java deps |
-| API style | Library functions + thin CLI (`typer` or `argparse`) + optional FastAPI `serve` | Library-first, like the paper |
-| Delivery | Local run; GitHub Actions running pytest on push (Phase 0) | Reproducibility signal for portfolio |
-| Identity | None — local single-user tool | Out of scope (PRD non-goal) |
+| Language | Python ≥3.11 | Matches the scientific/IR ecosystem |
+| Storage | SQLite + FTS5 + sqlite-vec | Single-file, transactional, local architecture |
+| Embeddings | CPU `all-MiniLM-L6-v2` | Free, compact, reproducible directional study |
+| Quantization | Application-side NumPy blocks | sqlite-vec 0.1.9 rejects int8/bit inputs |
+| Metrics | ranx | Python-native BEIR-style metrics |
+| API | argparse + library functions + FastAPI | Small dependency surface |
+| UI | Packaged HTML/CSS/vanilla JS | No CDN, framework, or build step |
+| CI | Mandatory core + full local stack + wheel | Verifies clean install and package data |
 
-## Architecture of the library
+## Modules
 
-Modules:
-- `ingest.py` — corpus loading (folder of txt/md, BEIR JSONL), id assignment, transactional batch upsert.
-- `embed.py` — `SentenceEmbedding` wrapper (model name → normalized vectors), batched encode, precision transforms (`float32`, int8 scale/zero-point, binary sign-bits packed).
-- `store.py` — schema creation/migration, FTS5 sync triggers, vec-table writes.
-- `search.py` — three modes + RRF fusion + optional rerank (cosine over float vectors of top candidates).
-- `evaluate.py` — BEIR loader, qrels handling, ranx evaluation, latency measurement, markdown report writer.
+- `ingest.py` — text/folder/JSONL loading and collision-safe IDs.
+- `embed.py` — CPU model wrapper, composition, and quantization transforms.
+- `store.py` — schema-v2 lifecycle, transactions, vector health, and metadata.
+- `search.py` — BM25, native float KNN, block-scanned quantized modes, RRF, linear fusion, and reranking.
+- `evaluate.py` — atomic BEIR builds, manifests, reports, alpha sweeps, and smoke cases.
+- `serve.py` — capability-aware API, packaged static UI, CSP, lifecycle, and reset safety.
+- `cli.py` — lowercase cross-platform command surface.
 
 ## Decision records
 
-**ADR-1: Reimplement rather than fork.**
-Context: goal is learning + portfolio signal. Options: fork upstream MIT repo / reimplement from paper. Choice: reimplement from paper, allowed to read upstream for API sanity. Consequences: slower start, far stronger demonstration; risk of subtle divergence documented via tests vs reported behaviors. Revisit when: timeline pressure before deadline → switch to "extension on upstream" framing.
+### ADR-1 — Reimplement from the paper
 
-**ADR-2: SQLite+FTS5+sqlite-vec as sole storage.**
-Options: Chroma / FAISS sidecar / pgvector / pure SQLite. Choice: pure SQLite per paper thesis. Consequences: simpler story and deploy; ceiling ~100K docs comfortable. Revisit when: benchmark corpus grows beyond that.
+The project is an independent implementation and extension, not a fork. This demonstrates understanding and makes deviations auditable.
 
-**ADR-3 (key deviation): embedder downscale.**
-Context: paper's experiments center on Qwen/Qwen3-Embedding-8B (8B params — impractical here). Options: (a) same model via paid API/GPU; (b) smaller local model compared against *its own* MTEB baseline. Choice: (b) MiniLM-class. Reason: keeps everything free/local/CPU while preserving experimental design (13-ish configurations × datasets). Consequences: absolute nDCG will differ from paper tables; we compare directional patterns + our-model MTEB reference instead. Revisit when: GPU access appears → add bge-base run as second column.
+### ADR-2 — SQLite as the retrieval store
 
-**ADR-4: whole-document indexing for evaluation fidelity.**
-BEIR protocol scores whole documents; upstream example indexes docs directly. Choice: no chunking in V1 eval path. Consequences: honest comparability with published numbers; chunking added later only for the app-facing feature set. 
+FTS5 handles lexical ranking and sqlite-vec stores/queries float vectors. The design favors operational simplicity and a single archival index over distributed infrastructure.
 
-**ADR-5: metrics library = `ranx`.**
-Options: pytrec_eval (C ext) / ranx (pure Python). Choice: ranx. Consequence: trivial install on Windows; if a metric mismatches expectations we cross-check one table with pytrec_eval once.
+### ADR-3 — CPU-first MiniLM
 
-**ADR-7: int8/binary search modes computed application-side over float32 storage (Phase 2).**
-Status: Accepted
-Context: the paper evaluates semantic retrieval at three storage precisions (float cosine, int8 cosine, binary Hamming) attributed to sqlite-vec capabilities.
-Finding: the installed wheel (`sqlite_vec` v0.1.9) declares `int8[n]` / `bit[n]` columns but **rejects every input path for them** — raw BLOB, `serialize_int8`, JSON array, even float-BLOB — for both INSERT and MATCH query vectors ("expected to be of type int8/bit, but a float32 vector was provided"). Only float32 works end-to-end.
-Options: (a) hunt for a newer/dev sqlite-vec build and pin it; (b) keep one native `vec_float` table and compute int8-cosine and sign-bit-Hamming in numpy over the stored vectors inside the library API.
-Choice: (b).
-Reason: metrically identical to the paper's configurations, fully deterministic, zero fragile pins, and honest at our corpus sizes (~ms brute force in numpy). The limitation is itself a reproducible result worth reporting.
-Consequences: the paper's *latency* claims for quantized search are not reproduced natively (our eval measures our real latencies instead); storage keeps one copy of vectors, not three.
-Revisit when: a sqlite-vec release accepts quantized inputs — then `semantic_search` flips back behind the same function signature and T-10 can benchmark both paths.
+`all-MiniLM-L6-v2` keeps the project free and accessible. Absolute scores are not expected to match an 8B model; directional retrieval findings are the target.
 
-**ADR-8: hybrid fusion parameters.**
-Status: Accepted
-Context: the paper fuses lexical + semantic rankings via RRF but our extraction does not state its fusion constant or retrieval depth.
-Choice: RRF k=60 (Cormack et al. 2009 default), each leg retrieves depth k (the requested result count), fused top-k returned; `--rerank` rescores the fused candidate pool (≤2k docs) by full-precision cosine against stored vectors.
-Reason: standard, deterministic, and matches the paper's "optionally reranked using more costly approaches" second stage.
-Consequences: a deeper leg depth might raise recall at higher latency; kept simple for V1.
-Revisit when: Phase 4 evaluation shows recall@10 deficits vs paper direction — then sweep leg depth as part of T-10 extension option 1.
+### ADR-4 — Whole-document V1 indexing
 
-**ADR-9: BEIR datasets acquired from HuggingFace-hosted copies.**
-Status: Accepted
-Context: original BEIR hosting has shifted over the years; PRD risk R1 anticipated download flakiness.
-Finding: `BeIR/<name>` on the HF Hub serves corpus/queries as parquet under `corpus/` and `queries/` folders, with qrels in sibling repos `BeIR/<name>-qrels` as raw TSV.
-Choice: download-and-cache those files under `data/` (gitignored); read parquet via `pyarrow`, exposed through a new `[eval]` extra alongside `ranx`.
-Consequences: one extra dependency in the eval path only; registry names (`scifact`, `nfcorpus`) plus a local-folder mode keep tests fully offline-capable.
-Revisit when: HF layout changes again — loaders accept both jsonl and parquet to soften future moves.
+One chunk maps to one document, preserving the standard BEIR evaluation unit. Document chunking remains an application-layer extension.
 
-## Performance budget & observability
+### ADR-5 — ranx metrics
 
-- Index throughput target: ≥100 docs/s on SciFact-sized corpora (CPU).
-- Query budget p95 ≤150 ms @ ≤10K docs (any mode).
-- Observability: `--verbose` structured logs (stage timings: embed ms, fts ms, knn ms, fuse ms); every eval report embeds machine metadata (CPU, RAM, package versions).
+ranx provides nDCG@10, MAP@10, MRR@10, and Precision@10 without Java services.
 
-## Security & privacy
+### ADR-7 — Application-side int8 and binary ranking
 
-- No secrets required; model cache under user cache dir.
-- `serve` binds `127.0.0.1` only.
-- Docs indexed from disk stay on disk; README carries a note warning users not to index confidential folders into shareable `.db` files.
+The tested sqlite-vec 0.1.9 wheel declares quantized vector types but rejects quantized input paths. One float table is retained. Int8 uses a fixed scale of `1/127` for unit-normalized embeddings; binary uses sign bits and Hamming distance. Both scan bounded row blocks and maintain a deterministic top-k set.
 
-## Failure behaviour
+This preserves the paper's mathematical configurations while honestly reporting O(N) quantized behavior and float storage.
 
-- Missing FTS5/sqlite-vec at startup → explicit error naming the missing extension and install hint (T-00 checks this first).
-- Corrupt/partial DB → open() runs integrity check and reports recoverable vs fatal.
+### ADR-8 — Hybrid parameters
+
+RRF uses k=60. Without reranking, each leg retrieves the requested result depth. With reranking, each leg retrieves `--candidate-depth` (default 50), fusion creates the complete union, and cosine produces refreshed top-k scores using one query encoding.
+
+### ADR-9 — Atomic manifest-bound evaluation
+
+Evaluation builds into a unique staging database. Only a successful, healthy build replaces the target. The manifest contains source identity, corpus/query/qrels hashes, selected-ID digests, model/revision, dimensions, metrics, and configurations.
+
+### ADR-10 — Canonical file IDs and schema v2
+
+File documents use the relative path including suffix as their ID. This eliminates same-directory `.md`/`.txt` and cross-directory stem collisions. Schema v2 intentionally rejects old indexes; rebuilding is safer than silently mixing identities.
+
+### ADR-11 — Safe packaged UI
+
+The UI is package data under `onefind/static`. All response-derived content is inserted with DOM text nodes or server-generated highlight segments. A restrictive CSP and defensive headers are applied. Remote binds require an explicit unsafe acknowledgement.
+
+## Storage and transactions
+
+- Documents, chunks, FTS rows, and float vectors are written in explicit batch transactions.
+- Encoder shape, finite values, and nonzero norms are validated.
+- A failed batch rolls back completely.
+- Lexical updates to an already-embedded index are rejected unless an embedder is attached.
+- Attaching a model to a lexical index backfills missing vectors.
+- Index health compares document/chunk/FTS/vector counts and detects missing/orphan vectors.
+- External vector updates invalidate cached matrices through SQLite `data_version`.
+
+## Performance and observability
+
+- Float search uses sqlite-vec KNN.
+- Quantized search uses 2,048-row blocks by default and holds only a bounded candidate set.
+- Evaluation reports p50/p95 latency, dataset hashes, model revision, commit, Python/OS, and package versions.
+- The web API reports total request time and separate model-load time.
+
+## Security and privacy
+
+- No telemetry or hosted search service.
+- Loopback binding is the default and non-loopback binds require `--allow-remote`.
+- FTS input is tokenized and parameterized.
+- Indexed HTML is displayed as text.
+- CSP, frame denial, MIME sniffing protection, no-referrer, and browser permission restrictions are enabled.
+- Reset is disabled unless an explicit startup token is supplied.
+- Foreign absolute paths are not returned by browser-facing stats.
+
+## Known boundaries
+
+- Int8/binary search remains an exact full scan.
+- Whole-document retrieval is not optimized for very long application documents.
+- The unauthenticated remote mode is intentionally opt-in and unsuitable for direct internet exposure.
+- Reports preserve actual latency rather than claiming the original fixed budget was universally met.

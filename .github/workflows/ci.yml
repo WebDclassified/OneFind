@@ -1,14 +1,24 @@
-﻿name: ci
+name: ci
 
 on:
   push:
     branches: [main]
   pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
 
 jobs:
-  test:
+  core:
+    name: Core · Python ${{ matrix.python-version }}
     runs-on: ubuntu-latest
     strategy:
+      fail-fast: false
       matrix:
         python-version: ["3.11", "3.13"]
     steps:
@@ -16,9 +26,70 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: ${{ matrix.python-version }}
-      - name: Install package (light deps)
-        run: pip install -e ".[dev]"
-      - name: Run tests
-        run: pytest
-      - name: Engine environment proof
-        run: OneFind check
+          cache: pip
+      - name: Install declared core and test dependencies
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -e ".[dev]"
+          python -m pip check
+      - name: Run mandatory model-free tests
+        run: >
+          pytest -q
+          tests/test_fusion.py
+          tests/test_search_edges.py
+          tests/test_search_lexical.py
+          tests/test_ingest.py
+          tests/test_envcheck.py
+          tests/test_cli.py
+          tests/test_store.py
+          tests/test_sample_corpus.py
+          tests/test_eval.py::test_load_corpus_and_queries
+          tests/test_eval.py::test_load_qrels_parses_header_and_scores
+          tests/test_eval.py::test_missing_files_raise_data_error
+      - name: Prove CLI name and environment
+        run: |
+          onefind --version
+          onefind check
+
+  full:
+    name: Full local stack · Python 3.13
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+          cache: pip
+      - name: Install every declared feature
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -e ".[model,eval,serve,dev]"
+          python -m pip check
+      - name: Run all 100+ tests
+        run: pytest -q
+
+  package:
+    name: Wheel and packaged UI
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+          cache: pip
+      - name: Build and install artifacts
+        run: |
+          python -m pip install --upgrade pip build
+          python -m build
+          python -m pip install --force-reinstall --no-deps dist/*.whl
+          python -m pip check
+          onefind --version
+      - name: Verify static UI is inside the wheel
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+          from onefind.serve import _STATIC_DIR
+          assert (Path(_STATIC_DIR) / "index.html").is_file()
+          assert (Path(_STATIC_DIR) / "styles.css").is_file()
+          assert (Path(_STATIC_DIR) / "app.js").is_file()
+          PY

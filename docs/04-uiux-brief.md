@@ -1,49 +1,74 @@
-# 04 · UI/UX Brief
+# 04 · UI/UX Specification
 
-Project: OneFind reproduction · Version: v0.1 (draft) · Status: Proposed
-Scope: two surfaces — CLI output style (primary) and a minimal local demo page (Phase 6).
+Project: OneFind · Version: 1.1 · Status: Implemented
 
 ## Design direction
 
-Three adjectives: **calm, dense, precise.**
-Should feel like: a well-made database tool — numbers aligned, nothing decorative.
-Must not feel like: a marketing site or a toy demo.
+Calm, precise, private, and fast. The interface should feel like a focused local database tool rather than a marketing site. It uses system fonts, CSS tokens, inline vector symbols, and no external assets.
 
-## CLI rules (primary surface)
+## Visual system
 
-- Progress over silence: any operation >1 s shows progress (docs indexed / configs done).
-- Results as aligned tables: rank, id, score, truncated snippet; scores to 4 decimals.
-- Errors: `error:` prefix, one-line cause + one-line fix; never stack traces unless `--verbose`.
-- No emoji in default output; color optional and auto-disabled when not a TTY.
+| Token | Light | Dark role |
+|---|---|---|
+| Primary | `#5754d9` | `#a7a4ff` |
+| Surface | `#ffffff` | `#191c28` |
+| Background | `#f6f7fb` | `#10121a` |
+| Main text | `#151827` | `#f4f5fa` |
+| Secondary text | `#62697c` | `#b1b6c7` |
+| Border | `#dfe2ec` | `#303646` |
+| Highlight | warm yellow | readable dark contrast |
 
-## Demo page tokens
+Radii range from 10–24 px. Shadows are restrained. Dark mode follows `prefers-color-scheme`; forced-colors and reduced-motion preferences are handled.
 
-| Token | Value |
-|---|---|
-| Surface | `#FFFFFF`, secondary `#F6F7F9` |
-| Text | `#111827` primary, `#6B7280` secondary |
-| Primary action | Indigo `#4F46E5` (white text) |
-| Danger | `#DC2626` |
-| Focus ring | 2px indigo outline offset 1px |
-| Type | system-ui stack; results body 14px, monospace for scores/ids |
-| Spacing | 4px base scale; cards radius 12px, inputs 8px |
+## Layout
 
-## Component rules
+1. Sticky compact header with product, on-device badge, and readiness status.
+2. Hero with plain-language value proposition and index facts.
+3. Prominent search panel with explicit Search and Clear actions.
+4. Retrieval-mode and precision radio groups.
+5. Result-count control and mode/precision explanation.
+6. Example query chips.
+7. Dedicated results region with summary and explicit states.
+8. Native ordered result list with rank, title, metadata, snippet, and labeled score.
 
-- Buttons: one primary per view; mode toggle is a segmented control (radio semantics).
-- Query input: always visible at top; `/` focuses it from anywhere.
-- Results list: max width ~72ch; snippet highlights `<mark>` with yellow-100 background.
-- Loading: input disabled + inline spinner; skeleton rows after 300 ms (respects reduced-motion).
-- Empty/no-results/error states exactly as specified in doc 03 table.
+Maximum content width is 1060 px. The layout becomes single-column below 800 px and uses compact controls below 620 px.
 
-## Responsive & accessibility
+## Interaction rules
 
-- Breakpoint: single column below 720px; toggle wraps above input.
-- Keyboard: full tab order; Enter submits; `/` shortcut; visible focus everywhere.
-- Contrast target: WCAG 2.2 AA for all text (≥4.5:1).
-- Results count announced via `aria-live="polite"`.
-- Touch targets ≥44px on mobile.
+- Form submission occurs only through the explicit Search action.
+- Mode/precision changes rerun a nonblank query once.
+- In-flight requests are aborted and guarded by a monotonically increasing request ID.
+- Loading disables the input and exposes a truthful status.
+- `/` focuses search outside editable controls; `Ctrl/Cmd+K` always focuses it; Escape clears a focused query.
+- Capability-aware controls disable unsupported semantic modes and precisions.
+- Current query/mode/precision/k are reflected in shareable URL query parameters and restored after capabilities load.
+- A blank query returns to idle without sending a request.
 
-## References → principles (not clones)
+## Content safety
 
-Linear-style restraint (density + calm), Google-search familiarity for the query box, terminal-inspired monospace scores. Do not copy any product's assets or layout wholesale.
+- No response-derived `innerHTML` or `insertAdjacentHTML` is used.
+- Titles, IDs, sources, snippets, errors, and score metrics use `textContent`.
+- Highlights are rendered only from validated server-side segments.
+- Untrusted angle brackets, event handlers, emoji, bidi text, and long unbroken strings remain visible text and wrap safely.
+
+## Accessibility
+
+- Native form, radio, fieldset, ordered-list, article, and heading semantics.
+- Visible keyboard focus and minimum 40–54 px interactive targets.
+- Concise live announcements rather than reading the whole result list.
+- `aria-busy` during loading.
+- Decorative SVGs and skeletons hidden from assistive technology.
+- Status never relies on color alone.
+- Touch and mobile layouts preserve 44 px controls where practical.
+
+## Security headers
+
+The server applies a restrictive same-origin CSP, `X-Content-Type-Options: nosniff`, `X-Frame-Options: DENY`, `Referrer-Policy: no-referrer`, and a restrictive browser Permissions Policy. HTML, CSS, and JavaScript are separate same-origin package assets.
+
+## Result semantics
+
+Raw scores are not described as confidence. Each result includes the backend metric name: BM25 score, cosine similarity, negative Hamming distance, or RRF fusion score. Sources are displayed as metadata rather than synthesized as links.
+
+## Responsive and print behavior
+
+Long text wraps with `overflow-wrap: anywhere`. Header and result metadata truncate safely where appropriate. Print output removes controls and preserves each result card without breaking across pages.

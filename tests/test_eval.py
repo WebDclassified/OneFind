@@ -118,3 +118,46 @@ def test_run_eval_writes_report_with_all_configs(none, tmp_path):
         return rows
 
     assert effectiveness(first) == effectiveness(second)
+    assert "MAP@10" in first and "MRR@10" in first
+    assert "model revision" in first.lower()
+
+
+def test_failed_rebuild_never_overwrites_existing_database(tmp_path, monkeypatch):
+    pytest.importorskip("ranx")
+    from onefind import evaluate
+
+    folder = _make_fixture(tmp_path)
+    sentinel = tmp_path / "existing.db"
+    sentinel.write_text("do-not-replace", encoding="utf-8")
+
+    def fail_model(*_args, **_kwargs):
+        raise RuntimeError("simulated model startup failure")
+
+    monkeypatch.setattr(evaluate, "SentenceEmbedder", fail_model)
+    with pytest.raises(RuntimeError, match="model startup"):
+        evaluate.run_eval(
+            str(folder),
+            db=sentinel,
+            k=2,
+            out_dir=tmp_path / "reports",
+        )
+    assert sentinel.read_text(encoding="utf-8") == "do-not-replace"
+    assert not list(tmp_path.glob("*.building"))
+
+
+def test_query_limit_keeps_qrels_aligned(tmp_path):
+    pytest.importorskip("ranx")
+    pytest.importorskip("sentence_transformers")
+    from onefind.evaluate import run_eval
+
+    folder = _make_fixture(tmp_path)
+    report = run_eval(
+        str(folder),
+        db=tmp_path / "limited.db",
+        k=2,
+        limit_queries=1,
+        out_dir=tmp_path / "limited-reports",
+    )
+    text = report.read_text(encoding="utf-8")
+    assert "judged queries: 1" in text
+    assert "| lexical |" in text
