@@ -32,7 +32,7 @@ const dom = {
 
 const state = {
   stats: null,
-  mode: "lexical",
+  mode: "hybrid",
   precision: "float",
   k: 10,
   requestId: 0,
@@ -42,15 +42,15 @@ const state = {
 };
 
 const MODE_HELP = {
-  lexical: "Keyword mode ranks exact lexical matches and is ideal for names, codes, and precise phrases.",
-  semantic: "Semantic mode compares meaning, so related wording can match even without shared keywords.",
-  hybrid: "Hybrid mode combines keyword relevance and semantic similarity with reciprocal rank fusion.",
+  lexical: "Keyword mode is tuned for record IDs, names, dates, codes, and exact phrases.",
+  semantic: "Meaning mode compares related ideas, even when the wording changes.",
+  hybrid: "Recommended: Hybrid combines exact keyword evidence with meaning-based retrieval.",
 };
 
 const PRECISION_HELP = {
-  float: "Float mode uses sqlite-vec cosine KNN over full-precision vectors.",
-  int8: "Int8 mode compares globally quantized vectors in bounded local blocks.",
-  binary: "Binary mode compares one-bit vector signs using Hamming distance.",
+  float: "Full precision is the recommended local setting.",
+  int8: "Int8 uses quantized cosine similarity in a bounded local scan.",
+  binary: "Binary uses one-bit sign vectors and Hamming distance.",
 };
 
 const STATES = ["idle", "loading", "noIndex", "empty", "error"];
@@ -150,6 +150,8 @@ function configureControls(stats) {
 
   state.mode = preferredMode;
   state.precision = preferredPrecision;
+  document.querySelector('input[name="mode"][value="hybrid"]')?.closest("label")
+    ?.classList.toggle("recommended", preferredMode === "hybrid");
   updateModeUI();
   updateControlAvailability();
 }
@@ -164,7 +166,7 @@ function updateControlAvailability() {
 }
 
 function updateModeUI() {
-  state.mode = selectedRadio("mode")?.value || "lexical";
+  state.mode = selectedRadio("mode")?.value || "hybrid";
   state.precision = selectedRadio("precision")?.value || "float";
   state.k = Number(dom.resultCount.value) || 10;
   const semanticMode = state.mode !== "lexical";
@@ -173,6 +175,12 @@ function updateModeUI() {
     ? `${MODE_HELP[state.mode]} ${PRECISION_HELP[state.precision] || ""}`.trim()
     : MODE_HELP.lexical;
   dom.modeExplainer.textContent = help;
+  for (const input of document.querySelectorAll('input[name="mode"]')) {
+    input.closest("label")?.classList.toggle("selected", input.checked);
+  }
+  const hybridInput = document.querySelector('input[name="mode"][value="hybrid"]');
+  const recommendation = hybridInput?.closest("label")?.querySelector("em");
+  if (recommendation) recommendation.hidden = hybridInput.disabled;
 }
 
 async function fetchJSON(url, options = {}) {
@@ -225,14 +233,14 @@ async function loadStats() {
     if (!stats.ready) {
       setServiceStatus("No index", "error");
       setState("noIndex");
-      dom.resultsSummary.textContent = "Waiting for a local index.";
+      dom.resultsSummary.textContent = "No local index · build one to depart";
       announce("No local index is loaded.");
       return false;
     } else {
       const healthLabel = stats.health?.ok === false ? "Index needs attention" : "Index ready";
       setServiceStatus(healthLabel, stats.health?.ok === false ? "error" : "ready");
       setState("idle");
-      dom.resultsSummary.textContent = `${formatInteger(stats.documents)} documents available.`;
+      dom.resultsSummary.textContent = `Ready · ${formatInteger(stats.documents)} documents available`;
       announce(`${stats.documents} documents are available.`);
       return true;
     }
@@ -254,8 +262,10 @@ function announce(message) {
 
 function showError(message) {
   dom.errorMessage.textContent = message;
+  const noAnswerGuidance = document.querySelector(".no-answer-guidance");
+  if (noAnswerGuidance) noAnswerGuidance.hidden = true;
   setState("error");
-  dom.resultsSummary.textContent = "Request failed.";
+  dom.resultsSummary.textContent = "Request could not be completed.";
   announce("Search failed.");
 }
 
@@ -302,6 +312,13 @@ function renderSnippet(target, segments) {
   target.append(fragment);
 }
 
+function modeLabel(mode) {
+  if (mode === "lexical") return "Keyword";
+  if (mode === "semantic") return "Meaning";
+  if (mode === "hybrid") return "Hybrid";
+  return "Route";
+}
+
 function renderResults(results, meta) {
   const fragment = document.createDocumentFragment();
   results.forEach((result, index) => {
@@ -316,6 +333,16 @@ function renderResults(results, meta) {
 
     const body = document.createElement("div");
     body.className = "result-body";
+    const route = document.createElement("div");
+    route.className = "result-route";
+    const routePath = document.createElement("span");
+    routePath.textContent = "Query > Document > Route";
+    const badge = document.createElement("span");
+    badge.className = index === 0 ? "result-badge current" : "result-badge";
+    badge.textContent = index === 0 ? "Current" : `Waypoint ${String(index + 1).padStart(2, "0")}`;
+    route.append(routePath, badge);
+    body.append(route);
+
     const title = document.createElement("h3");
     title.className = "result-title";
     title.textContent = result.title || result.docId || "Untitled document";
@@ -323,6 +350,9 @@ function renderResults(results, meta) {
 
     const metadata = document.createElement("div");
     metadata.className = "result-meta";
+    const channel = document.createElement("span");
+    channel.textContent = `${modeLabel(meta.mode)} route`;
+    metadata.append(channel);
     if (result.docId) {
       const docId = document.createElement("span");
       docId.textContent = result.docId;
@@ -335,7 +365,7 @@ function renderResults(results, meta) {
       source.title = result.source;
       metadata.append(source);
     }
-    if (metadata.childElementCount) body.append(metadata);
+    body.append(metadata);
 
     if (result.snippet.length) {
       const snippet = document.createElement("p");
@@ -359,20 +389,24 @@ function renderResults(results, meta) {
   dom.resultsList.replaceChildren(fragment);
   setState("results");
 
-  const modeLabel = meta.mode.charAt(0).toUpperCase() + meta.mode.slice(1);
-  dom.resultsSummary.textContent = `${results.length} result${results.length === 1 ? "" : "s"} · ${modeLabel} · ${Math.round(meta.tookMs)} ms`;
+  const resolvedMode = meta.mode.charAt(0).toUpperCase() + meta.mode.slice(1);
+  dom.resultsSummary.textContent = `Route complete · ${results.length} result${results.length === 1 ? "" : "s"} · ${resolvedMode} · ${Math.round(meta.tookMs)} ms`;
   announce(`${results.length} results found.`);
 }
 
 function renderNoResults(mode) {
   const suggestions = {
-    lexical: "Try fewer words, remove exact filters, or search for a distinctive term.",
-    semantic: "Try describing the concept more generally, or switch to hybrid mode.",
-    hybrid: "Try fewer words or switch modes to broaden the candidate pool.",
+    lexical: "Keyword mode requires every query term. Try a record ID, a shorter phrase, or fewer exact words.",
+    semantic: "No document was close enough in meaning. Try a broader description or Hybrid mode.",
+    hybrid: "No document matched both signals. Try fewer words or switch to Meaning mode.",
   };
   dom.emptyCopy.textContent = suggestions[mode] || suggestions.hybrid;
+  const noAnswerGuidance = document.querySelector(".no-answer-guidance");
+  if (noAnswerGuidance) {
+    noAnswerGuidance.hidden = mode !== "semantic" && mode !== "hybrid";
+  }
   setState("empty");
-  dom.resultsSummary.textContent = "No matches";
+  dom.resultsSummary.textContent = "No close match · adjust route";
   announce("No matching documents found.");
 }
 
@@ -416,12 +450,16 @@ async function submitSearch(event) {
   updateUrlState();
 
   const firstSemanticLoad = state.mode !== "lexical" && !state.stats.modelLoaded;
-  dom.loadingTitle.textContent = firstSemanticLoad ? "Loading local model…" : "Searching…";
+  dom.loadingTitle.textContent = firstSemanticLoad
+    ? "Preparing local meaning map…"
+    : "Searching local route…";
   dom.loadingCopy.textContent = firstSemanticLoad
-    ? "The first semantic search prepares the free CPU embedding model."
+    ? "The first meaning search prepares the local embedding model."
     : `Ranking up to ${state.k} documents with ${state.mode} retrieval.`;
+  const noAnswerGuidance = document.querySelector(".no-answer-guidance");
+  if (noAnswerGuidance) noAnswerGuidance.hidden = true;
   setState("loading");
-  dom.resultsSummary.textContent = "Searching local index…";
+  dom.resultsSummary.textContent = "Routing through local index…";
   announce("Search started.");
 
   const started = performance.now();
@@ -440,6 +478,8 @@ async function submitSearch(event) {
     if (requestId !== state.requestId) return;
     if (!payload || !Array.isArray(payload.results)) throw new Error("Invalid search response");
     if (state.stats) state.stats.modelLoaded = true;
+    const noAnswerGuidance = document.querySelector(".no-answer-guidance");
+    if (noAnswerGuidance) noAnswerGuidance.hidden = true;
     const results = payload.results.map(normalizeResult);
     const elapsed = Number.isFinite(Number(payload.meta?.took_ms))
       ? Number(payload.meta.took_ms)
@@ -480,6 +520,10 @@ dom.form.addEventListener("submit", submitSearch);
 dom.clear.addEventListener("click", clearSearch);
 dom.retry.addEventListener("click", () => submitSearch());
 dom.resultCount.addEventListener("change", updateModeUI);
+document.getElementById("advanced-settings")?.addEventListener("toggle", (event) => {
+  if (event.currentTarget.open) event.currentTarget.classList.add("open");
+  else event.currentTarget.classList.remove("open");
+});
 
 for (const input of document.querySelectorAll('input[name="mode"], input[name="precision"]')) {
   input.addEventListener("change", () => {
@@ -494,8 +538,16 @@ for (const input of document.querySelectorAll('input[name="mode"], input[name="p
 dom.examples.addEventListener("click", (event) => {
   const button = event.target.closest("button[data-query]");
   if (!button || button.disabled) return;
+  const requestedMode = button.dataset.mode;
+  if (requestedMode) {
+    const modeInput = document.querySelector(
+      `input[name="mode"][value="${requestedMode}"]`,
+    );
+    if (modeInput && !modeInput.disabled) modeInput.checked = true;
+  }
   dom.input.value = button.dataset.query || "";
   dom.clear.hidden = false;
+  updateModeUI();
   submitSearch();
 });
 
@@ -539,9 +591,9 @@ async function bootstrap() {
     : null;
   if (modeInput && !modeInput.disabled) modeInput.checked = true;
   if (precisionInput && !precisionInput.disabled) precisionInput.checked = true;
-  if (["5", "10", "20", "30"].includes(requestedK)) dom.resultCount.value = requestedK;
   dom.input.value = query;
   dom.clear.hidden = false;
+  if (requestedK) dom.resultCount.value = requestedK;
   updateModeUI();
   await submitSearch();
 }

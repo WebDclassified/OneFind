@@ -39,6 +39,9 @@ def parse_args() -> argparse.Namespace:
         "--xss-db", type=Path, default=ROOT / "data" / "ui-xss.db"
     )
     parser.add_argument(
+        "--showcase-db", type=Path, default=ROOT / "data" / "showcase.db"
+    )
+    parser.add_argument(
         "--missing-db", type=Path, default=ROOT / "data" / "ui-no-index.db"
     )
     parser.add_argument("--port-base", type=int, default=8090)
@@ -117,6 +120,23 @@ def prepare_fixtures(args: argparse.Namespace) -> None:
             check=True,
         )
 
+    remove_sqlite(args.showcase_db)
+    args.showcase_db.parent.mkdir(parents=True, exist_ok=True)
+    subprocess.run(
+        [
+            sys.executable,
+            "-m",
+            "onefind.cli",
+            "index",
+            str(ROOT / "showcase-data"),
+            "--db",
+            str(args.showcase_db),
+            "--embed",
+        ],
+        cwd=ROOT,
+        check=True,
+    )
+
     remove_sqlite(args.lexical_db)
     args.lexical_db.parent.mkdir(parents=True, exist_ok=True)
     with Index.open(args.lexical_db) as index:
@@ -140,7 +160,7 @@ def prepare_fixtures(args: argparse.Namespace) -> None:
 
 def start_services(args: argparse.Namespace) -> list[tuple[subprocess.Popen, int, Path]]:
     services = [
-        (args.indexed_db, args.port_base),
+        (args.showcase_db, args.port_base),
         (args.lexical_db, args.port_base + 1),
         (args.missing_db, args.port_base + 2),
         (args.xss_db, args.port_base + 3),
@@ -199,10 +219,10 @@ def stop_services(processes) -> None:
             process.kill()
 
 
-def new_page(browser: Browser, *, width=1440, height=1000, dark=False, mobile=False):
+def new_page(browser: Browser, *, width=1440, height=1000, dark_os=False, mobile=False):
     context = browser.new_context(
         viewport={"width": width, "height": height},
-        color_scheme="dark" if dark else "light",
+        color_scheme="dark" if dark_os else "light",
         is_mobile=mobile,
         has_touch=mobile,
         device_scale_factor=1,
@@ -240,7 +260,14 @@ def select_mode(page: Page, mode: str) -> None:
 
 
 def select_precision(page: Page, precision: str) -> None:
+    open_technical(page)
     page.locator(f'input[name="precision"][value="{precision}"]').check(force=True)
+
+
+def open_technical(page: Page) -> None:
+    panel = page.locator("#advanced-settings")
+    if panel.count() == 1 and not panel.evaluate("(element) => element.open"):
+        panel.locator("summary").click()
 
 
 def run_search(
@@ -254,6 +281,7 @@ def run_search(
     select_mode(page, mode)
     if mode != "lexical":
         select_precision(page, precision)
+    open_technical(page)
     page.locator("#result-count").select_option(str(k))
     page.locator("#search-input").fill(query)
     page.locator("#search-button").click()
@@ -276,6 +304,7 @@ def run_checks(browser: Browser, args: argparse.Namespace) -> dict:
     output.mkdir(parents=True, exist_ok=True)
     base = args.port_base
     indexed = f"http://127.0.0.1:{base}"
+    showcase = f"http://127.0.0.1:{base}"
     lexical = f"http://127.0.0.1:{base + 1}"
     missing = f"http://127.0.0.1:{base + 2}"
     xss = f"http://127.0.0.1:{base + 3}"
@@ -297,21 +326,29 @@ def run_checks(browser: Browser, args: argparse.Namespace) -> dict:
     assert page.locator('input[name="mode"][value="semantic"]').is_enabled()
     assert page.locator('input[name="mode"][value="hybrid"]').is_enabled()
     assert page.locator('input[name="precision"][value="int8"]').is_enabled()
+    assert page.locator('input[name="mode"][value="hybrid"]').is_checked()
+    assert not page.locator("#advanced-settings").evaluate("element => element.open")
+    open_technical(page)
+    assert page.locator("#advanced-settings").evaluate("element => element.open")
+    assert page.locator("#result-count").is_visible()
+    capture(page, output, "02a-technical-settings-open.png", manifest)
+    page.locator("#advanced-settings summary").click()
+    assert not page.locator("#advanced-settings").evaluate("element => element.open")
     capture(page, output, "01-indexed-idle.png", manifest)
-    passed("indexed idle and capabilities", csp)
+    passed("indexed idle, hybrid default, and tucked technical settings", csp)
     browser_errors["01-indexed-idle"] = errors
 
     # 2. First semantic request: actual lazy model loading state.
     select_mode(page, "semantic")
     select_precision(page, "float")
-    page.locator("#search-input").fill("how plants turn sunlight into food")
+    page.locator("#search-input").fill("How should our team handle rollback with clear ownership and evidence?")
     page.locator("#search-button").click()
     page.locator("#loading-state").wait_for(state="visible", timeout=10_000)
     page.wait_for_timeout(250)
     assert page.locator("#results-section").get_attribute("aria-busy") == "true"
     capture(page, output, "02-first-semantic-loading.png", manifest)
     wait_results(page, timeout=180_000)
-    page.locator("#results-list").get_by_text("photosynthesis.md", exact=False).first.wait_for()
+    page.locator("#results-list").get_by_text("rollback", exact=False).first.wait_for()
     capture(page, output, "03-semantic-float-results.png", manifest)
     passed("first semantic lazy-load and float result")
     browser_errors["02-first-semantic-loading"] = errors
@@ -319,12 +356,12 @@ def run_checks(browser: Browser, args: argparse.Namespace) -> dict:
 
     # 3. Every retrieval mode and precision exposed by the UI.
     combinations = [
-        ("keyword", "lexical", None, "chlorophyll", "photosynthesis.md", "04-keyword-results.png"),
-        ("semantic-int8", "semantic", "int8", "wild yeast starter culture", "sourdough.md", "05-semantic-int8-results.png"),
-        ("semantic-binary", "semantic", "binary", "ceramic surface that melts in a kiln", "pottery-glaze", "06-semantic-binary-results.png"),
-        ("hybrid-float", "hybrid", "float", "money after a surprise car repair", "emergency-fund", "07-hybrid-float-results.png"),
-        ("hybrid-int8", "hybrid", "int8", "compost ingredients and nutrient balance", "compost", "08-hybrid-int8-results.png"),
-        ("hybrid-binary", "hybrid", "binary", "vector embeddings for meaning search", "vector-embeddings", "09-hybrid-binary-results.png"),
+        ("keyword", "lexical", None, "PROD-001 feature flags", "prod-001", "04-keyword-results.png"),
+        ("semantic-int8", "semantic", "int8", "How should our team handle rollback with clear ownership and evidence?", "rollback", "05-semantic-int8-results.png"),
+        ("semantic-binary", "semantic", "binary", "How do we safely handle hostile HTML content?", "inert html", "06-semantic-binary-results.png"),
+        ("hybrid-float", "hybrid", "float", "CSP remote binding reset safety", "content security policy", "07-hybrid-float-results.png"),
+        ("hybrid-int8", "hybrid", "int8", "How are int8 vectors evaluated?", "int8 quantization", "08-hybrid-int8-results.png"),
+        ("hybrid-binary", "hybrid", "binary", "How is a failed deployment rolled back?", "rollback procedure", "09-hybrid-binary-results.png"),
     ]
     context, page, errors = new_page(browser)
     for label, mode, precision, query, expected, filename in combinations:
@@ -349,23 +386,23 @@ def run_checks(browser: Browser, args: argparse.Namespace) -> dict:
     context, page, errors = new_page(browser)
     wait_ready(page, indexed, "Index ready")
     for k in (5, 10, 20, 30):
-        run_search(page, "chlorophyll", "lexical", k=k)
+        run_search(page, "PROD-001 feature flags", "lexical", k=k)
         assert page.locator("#result-count").input_value() == str(k)
-    run_search(page, "chlorophyll", "lexical", k=5)
+    run_search(page, "PROD-001 feature flags", "lexical", k=5)
     capture(page, output, "11-results-k5.png", manifest)
-    run_search(page, "chlorophyll", "lexical", k=30)
+    run_search(page, "PROD-001 feature flags", "lexical", k=30)
     capture(page, output, "12-results-k30.png", manifest)
     passed("result count controls", "5, 10, 20, 30")
     browser_errors["result-counts"] = errors
 
     # 6. Shareable URL state.
     page.goto(
-        indexed
-        + "/?q=how%20plants%20turn%20sunlight%20into%20food&mode=hybrid&precision=binary&k=5",
+        showcase
+        + "/?q=How%20is%20a%20failed%20deployment%20rolled%20back%3F&mode=hybrid&precision=binary&k=5",
         wait_until="domcontentloaded",
     )
     wait_results(page)
-    assert page.locator("#search-input").input_value().startswith("how plants")
+    assert page.locator("#search-input").input_value().startswith("How is a failed")
     assert page.locator('input[name="mode"][value="hybrid"]').is_checked()
     assert page.locator('input[name="precision"][value="binary"]').is_checked()
     capture(page, output, "13-shareable-url-state.png", manifest)
@@ -373,19 +410,22 @@ def run_checks(browser: Browser, args: argparse.Namespace) -> dict:
     browser_errors["shareable-url"] = errors
     context.close()
 
-    # 7. Dark theme.
-    context, page, errors = new_page(browser, dark=True)
-    wait_ready(page, indexed, "Index ready")
-    run_search(page, "how plants turn sunlight into food", "hybrid", "float", 10, "photosynthesis.md")
-    capture(page, output, "14-dark-hybrid-results.png", manifest)
-    passed("dark color scheme")
-    browser_errors["dark"] = errors
+    # 7. Light-only UI under a dark operating-system preference.
+    context, page, errors = new_page(browser, dark_os=True)
+    wait_ready(page, showcase, "Index ready")
+    run_search(page, "How is a failed deployment rolled back?", "hybrid", "float", 10, "rollback")
+    background = page.locator("body").evaluate("element => getComputedStyle(element).backgroundColor")
+    assert background == "rgb(248, 247, 245)"
+    capture(page, output, "14-dark-os-light-ui.png", manifest)
+    passed("light-only UI under dark OS preference", background)
+    browser_errors["dark-os-light-ui"] = errors
     context.close()
 
     # 8. Mobile responsive layout.
     context, page, errors = new_page(browser, width=430, height=932, mobile=True)
-    wait_ready(page, indexed, "Index ready")
-    run_search(page, "compost ingredients and nutrient balance", "hybrid", "float", 5, "compost")
+    wait_ready(page, showcase, "Index ready")
+    run_search(page, "PROD-001 feature flags", "hybrid", "float", 5, "prod-001")
+    assert page.locator("#results-list .result-card").count() > 0
     capture(page, output, "15-mobile-hybrid-results.png", manifest)
     passed("mobile responsive layout", "430x932 touch viewport")
     browser_errors["mobile"] = errors
@@ -417,9 +457,9 @@ def run_checks(browser: Browser, args: argparse.Namespace) -> dict:
 
     # 11. Network failure after a valid page load.
     context, page, errors = new_page(browser)
-    wait_ready(page, indexed, "Index ready")
+    wait_ready(page, showcase, "Index ready")
     context.set_offline(True)
-    page.locator("#search-input").fill("chlorophyll")
+    page.locator("#search-input").fill("PROD-001 feature flags")
     page.locator("#search-button").click()
     page.locator("#error-state").wait_for(state="visible", timeout=15_000)
     capture(page, output, "19-network-error.png", manifest)
@@ -455,6 +495,42 @@ def run_checks(browser: Browser, args: argparse.Namespace) -> dict:
     browser_errors["xss-inert"] = errors
     context.close()
 
+    # 14. Keyboard focus and clear shortcuts on a fresh page.
+    context, page, errors = new_page(browser)
+    wait_ready(page, showcase, "Index ready")
+    page.locator("body").press("/")
+    assert page.locator("#search-input").evaluate("element => element === document.activeElement")
+    page.locator("#search-input").fill("shortcut clear")
+    page.keyboard.press("Escape")
+    assert page.locator("#search-input").input_value() == ""
+    assert page.locator("#idle-state").is_visible()
+    capture(page, output, "22-keyboard-shortcut-clear.png", manifest)
+    passed("keyboard shortcut and clear state", "/ focuses and Escape clears")
+    browser_errors["keyboard-shortcuts"] = errors
+    context.close()
+
+    # 15. Extreme narrow responsive layout and gallery presence.
+    context, page, errors = new_page(browser, width=320, height=760, mobile=True)
+    wait_ready(page, showcase, "Index ready")
+    assert page.locator("#search-input").is_visible()
+    assert page.locator("#memories").is_visible()
+    page.locator("#memories").scroll_into_view_if_needed()
+    capture(page, output, "23-narrow-gallery.png", manifest)
+    passed("320px narrow responsive gallery", "320x760 touch viewport")
+    browser_errors["narrow"] = errors
+    context.close()
+
+    # 16. Reduced motion remains usable.
+    context, page, errors = new_page(browser)
+    context.set_default_timeout(10_000)
+    page.emulate_media(reduced_motion="reduce")
+    wait_ready(page, showcase, "Index ready")
+    run_search(page, "PROD-001 feature flags", "hybrid", "float", 5, "prod-001")
+    capture(page, output, "24-reduced-motion-results.png", manifest)
+    passed("reduced motion results", "motion is minimized")
+    browser_errors["reduced-motion"] = errors
+    context.close()
+
     expected_console_tokens = {
         "network-error": ("ERR_INTERNET_DISCONNECTED",),
         "validation-error": ("422",),
@@ -477,7 +553,7 @@ def run_checks(browser: Browser, args: argparse.Namespace) -> dict:
         "generated_at": datetime.now(timezone.utc).isoformat(),
         "browser": "Chrome/Chromium via Playwright",
         "base_urls": {
-            "indexed": indexed,
+            "showcase": showcase,
             "lexical_only": lexical,
             "no_index": missing,
             "xss_fixture": xss,

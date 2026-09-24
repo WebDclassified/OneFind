@@ -1,15 +1,17 @@
 <!doctype html>
 <html lang="en">
+
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <meta name="color-scheme" content="light dark">
-  <meta name="theme-color" content="#f7f8fc">
-  <title>OneFind · Local hybrid search</title>
+  <meta name="color-scheme" content="light">
+  <meta name="theme-color" content="#F8F7F5">
+  <title>OneFind · A Single-File Hybrid Information Retrieval System</title>
   <link rel="icon" href="/assets/favicon.svg" type="image/svg+xml">
   <link rel="stylesheet" href="/assets/styles.css">
   <script src="/assets/app.js" defer></script>
 </head>
+
 <body>
   <a class="skip-link" href="#search-input">Skip to search</a>
 
@@ -18,23 +20,20 @@
       <a class="brand" href="/" aria-label="OneFind home">
         <span class="brand-mark" aria-hidden="true">
           <svg viewBox="0 0 32 32" role="img">
-            <path d="M14.8 3.5a11.3 11.3 0 1 0 7.9 19.2l5.1 5.1 2.3-2.3-5.1-5.1A11.3 11.3 0 0 0 14.8 3.5Zm0 2.6a8.7 8.7 0 1 1 0 17.4 8.7 8.7 0 0 1 0-17.4Z"/>
-            <circle cx="12.2" cy="12.2" r="2.1"/>
-            <circle cx="17.4" cy="17.4" r="2.1"/>
-            <path d="m13.5 13.5 2.6 2.6" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/>
+            <circle cx="16" cy="16" r="11" fill="none" stroke="currentColor" stroke-width="1.4" />
+            <path d="m16 5 2.2 8.8L27 16l-8.8 2.2L16 27l-2.2-8.8L5 16l8.8-2.2L16 5Z" fill="none" stroke="currentColor"
+              stroke-width="1.2" stroke-linejoin="round" />
+            <circle cx="16" cy="16" r="2.1" fill="currentColor" />
           </svg>
         </span>
-        <span>
+        <span class="brand-copy">
           <strong>OneFind</strong>
-          <small>Local hybrid search</small>
         </span>
       </a>
 
+
+
       <div class="header-actions">
-        <span class="privacy-badge" title="Queries stay on this machine">
-          <svg viewBox="0 0 20 20" aria-hidden="true"><path d="M10 1.7 16 4v4.6c0 4-2.5 7.6-6 9.7-3.5-2.1-6-5.7-6-9.7V4l6-2.3Zm0 3L6.2 6.2v2.4c0 2.7 1.5 5.2 3.8 6.8 2.3-1.6 3.8-4.1 3.8-6.8V6.2L10 4.7Z"/></svg>
-          On-device
-        </span>
         <span class="service-pill" id="service-status" role="status">
           <span class="status-dot" aria-hidden="true"></span>
           Connecting
@@ -45,113 +44,154 @@
 
   <main class="page-shell">
     <section class="hero" aria-labelledby="page-title">
-      <p class="eyebrow">Private retrieval workspace</p>
-      <h1 id="page-title">Find the right document, not just the right words.</h1>
-      <p class="hero-copy">Search a local SQLite index with keyword matching, semantic similarity, or a blend of both.</p>
-      <div class="index-facts" aria-label="Index status">
-        <span><strong id="document-count">—</strong> documents</span>
-        <span><strong id="vector-count">—</strong> vectors</span>
-        <span><strong id="index-size">—</strong> on disk</span>
+      <div class="hero-copy">
+        <h1 id="page-title">Find the right document<br><em>not just the right words.</em></h1>
+        <p class="hero-copy-text">Search the local archive. Exact words, related ideas, semantic similarities or a
+          considered blend of both. </p>
+        <div class="hero-route" aria-label="Search route">
+          <span>Search</span>
+          <span class="route-line" aria-hidden="true"><i></i><i></i><i></i></span>
+          <span>Result</span>
+        </div>
+        <div class="index-facts" aria-label="Index status">
+          <span><strong id="document-count">—</strong> documents</span>
+          <span><strong id="vector-count">—</strong> vectors</span>
+          <span><strong id="index-size">—</strong> on disk</span>
+        </div>
       </div>
+
+
     </section>
 
     <section class="search-panel" aria-labelledby="search-heading">
-      <div class="panel-heading">
+      <div class="section-heading-row">
         <div>
-          <p class="section-kicker">Search</p>
-          <h2 id="search-heading">Ask the local index</h2>
+          <h2 id="search-heading">Search</h2>
         </div>
-        <span class="shortcut-hint" aria-hidden="true"><kbd>/</kbd> to focus</span>
+        <span class="route-code">ROUTE 01 <span aria-hidden="true">/</span> LOCAL</span>
       </div>
 
       <form id="search-form" novalidate>
         <label class="sr-only" for="search-input">Search query</label>
         <div class="search-row">
           <div class="input-wrap">
-            <svg class="input-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="m20.6 19.1-4.2-4.2a7.5 7.5 0 1 0-1.5 1.5l4.2 4.2 1.5-1.5ZM5 10.5a5.5 5.5 0 1 1 11 0 5.5 5.5 0 0 1-11 0Z"/></svg>
-            <input id="search-input" name="query" type="search" maxlength="512"
-              autocomplete="off" spellcheck="true"
-              placeholder="Try a question, phrase, or keyword…"
-              aria-describedby="query-help">
+            <svg class="input-icon" viewBox="0 0 24 24" aria-hidden="true">
+              <path
+                d="m20.6 19.1-4.2-4.2a7.5 7.5 0 1 0-1.5 1.5l4.2 4.2 1.5-1.5ZM5 10.5a5.5 5.5 0 1 1 11 0 5.5 5.5 0 0 1-11 0Z" />
+            </svg>
+            <input id="search-input" name="query" type="search" maxlength="512" autocomplete="off" spellcheck="true"
+              placeholder="Enter a destination, phrase, or question..." aria-describedby="query-help">
             <button class="clear-button" id="clear-button" type="button" aria-label="Clear search" hidden>
-              <svg viewBox="0 0 20 20" aria-hidden="true"><path d="m5.7 4.3 4.3 4.3 4.3-4.3 1.4 1.4-4.3 4.3 4.3 4.3-1.4 1.4-4.3-4.3-4.3 4.3-1.4-1.4 4.3-4.3-4.3-4.3 1.4-1.4Z"/></svg>
+              <svg viewBox="0 0 20 20" aria-hidden="true">
+                <path
+                  d="m5.7 4.3 4.3 4.3 4.3-4.3 1.4 1.4-4.3 4.3 4.3 4.3-1.4 1.4-4.3-4.3-4.3 4.3-1.4-1.4 4.3-4.3-4.3-4.3 1.4-1.4Z" />
+              </svg>
             </button>
           </div>
           <button class="search-button" id="search-button" type="submit">
             <span>Search</span>
-            <svg viewBox="0 0 20 20" aria-hidden="true"><path d="m11.3 3.3 6 6-6 6-1.4-1.4 3.6-3.6H2.5V8.7h10.9l-3.5-3.9 1.4-1.5Z"/></svg>
+            <svg viewBox="0 0 20 20" aria-hidden="true">
+              <path d="m11.3 3.3 6 6-6 6-1.4-1.4 3.6-3.6H2.5V8.7h10.9l-3.5-3.9 1.4-1.5Z" />
+            </svg>
           </button>
         </div>
-        <p class="field-help" id="query-help">Up to 512 characters. Your query is sent only to the local service.</p>
+        <p class="field-help" id="query-help"><span class="tiny-dot orange" aria-hidden="true"></span> Up to 512
+          characters. Your query stays on this machine.</p>
 
-        <div class="options-grid">
-          <fieldset class="option-group">
-            <legend>Retrieval mode</legend>
-            <div class="segmented-control">
-              <label>
-                <input type="radio" name="mode" value="lexical" checked>
-                <span><strong>Keyword</strong><small>Exact terms &amp; BM25</small></span>
-              </label>
-              <label>
-                <input type="radio" name="mode" value="semantic">
-                <span><strong>Semantic</strong><small>Meaning &amp; similarity</small></span>
-              </label>
-              <label>
-                <input type="radio" name="mode" value="hybrid">
-                <span><strong>Hybrid</strong><small>Best of both</small></span>
-              </label>
+        <fieldset class="option-group mode-group">
+          <legend>Route channel</legend>
+          <div class="segmented-control simple-modes">
+            <label>
+              <input type="radio" name="mode" value="lexical">
+              <span><strong>Keyword</strong><small>Exact words</small></span>
+            </label>
+            <label>
+              <input type="radio" name="mode" value="semantic">
+              <span><strong>Meaning</strong><small>Related ideas</small></span>
+            </label>
+            <label>
+              <input type="radio" name="mode" value="hybrid" checked>
+              <span class="mode-choice-copy"><strong>Hybrid</strong><small>Best
+                  balance</small><em>Recommended</em></span>
+            </label>
+          </div>
+        </fieldset>
+
+        <details class="advanced-settings" id="advanced-settings">
+          <summary>
+            <span class="summary-title">Technical settings</span>
+            <span class="summary-detail">Precision &amp; result count</span>
+            <span class="summary-icon" aria-hidden="true">+</span>
+          </summary>
+          <div class="advanced-content">
+            <fieldset class="option-group precision-group" id="precision-group" hidden>
+              <legend>Vector precision</legend>
+              <div class="segmented-control compact">
+                <label title="Full 32-bit float vectors">
+                  <input type="radio" name="precision" value="float" checked>
+                  <span><strong>Full</strong><small>Float32</small></span>
+                </label>
+                <label title="8-bit quantized cosine search">
+                  <input type="radio" name="precision" value="int8">
+                  <span><strong>Int8</strong><small>8-bit cosine</small></span>
+                </label>
+                <label title="One-bit sign vectors and Hamming distance">
+                  <input type="radio" name="precision" value="binary">
+                  <span><strong>Binary</strong><small>1-bit Hamming</small></span>
+                </label>
+              </div>
+            </fieldset>
+
+            <label class="result-count-control" for="result-count">
+              <span>Results shown</span>
+              <select id="result-count" name="k">
+                <option value="5">Top 5</option>
+                <option value="10" selected>Top 10</option>
+                <option value="20">Top 20</option>
+                <option value="30">Top 30</option>
+              </select>
+            </label>
+          </div>
+        </details>
+
+        <p class="mode-explainer" id="mode-explainer" aria-live="polite">
+          Hybrid combines exact keyword evidence with meaning-based retrieval.
+        </p>
+
+        <div class="examples-panel">
+          <div class="examples-heading">
+            <div>
+              <p class="section-kicker">Examples</p>
+              <h3>Choose a starting point</h3>
             </div>
-          </fieldset>
-
-          <fieldset class="option-group precision-group" id="precision-group" hidden>
-            <legend>Vector precision</legend>
-            <div class="segmented-control compact">
-              <label title="Full 32-bit float vectors">
-                <input type="radio" name="precision" value="float" checked>
-                <span><strong>Float</strong><small>Highest fidelity</small></span>
-              </label>
-              <label title="8-bit quantized cosine search">
-                <input type="radio" name="precision" value="int8">
-                <span><strong>Int8</strong><small>Compact precision</small></span>
-              </label>
-              <label title="One-bit sign vectors and Hamming distance">
-                <input type="radio" name="precision" value="binary">
-                <span><strong>Binary</strong><small>Smallest vectors</small></span>
-              </label>
-            </div>
-          </fieldset>
-
-          <label class="result-count-control" for="result-count">
-            <span>Results</span>
-            <select id="result-count" name="k">
-              <option value="5">5</option>
-              <option value="10" selected>10</option>
-              <option value="20">20</option>
-              <option value="30">30</option>
-            </select>
-          </label>
-        </div>
-
-        <div class="mode-explainer" id="mode-explainer">
-          Keyword mode ranks exact lexical matches and is ideal for names, codes, and precise phrases.
-        </div>
-
-        <div class="examples" id="examples" aria-label="Example searches">
-          <span>Try an example</span>
-          <div class="example-list">
-            <button type="button" data-query="how plants turn sunlight into food">Plant biology</button>
-            <button type="button" data-query="emergency fund after unexpected expenses">Personal finance</button>
-            <button type="button" data-query="vector embeddings for meaning-based search">Machine learning</button>
-            <button type="button" data-query="compost ingredients and nutrient balance">Composting</button>
+            <span class="micro-label">Optional</span>
+          </div>
+          <div class="showcase-grid" id="examples" aria-label="Example searches">
+            <button type="button" data-query="What does PROD-001 require for feature flags?" data-mode="hybrid">
+              <span class="example-number">01</span>
+              <span><strong>Find an exact policy</strong><small>PROD-001 · feature flags</small></span>
+            </button>
+            <button type="button" data-query="How should our team handle rollback with clear ownership and evidence?"
+              data-mode="semantic">
+              <span class="example-number">02</span>
+              <span><strong>Search by meaning</strong><small>Rollback · ownership · evidence</small></span>
+            </button>
+            <button type="button" data-query="CSP remote binding reset safety" data-mode="hybrid">
+              <span class="example-number">03</span>
+              <span><strong>Combine signals</strong><small>CSP · binding · reset</small></span>
+            </button>
+            <button type="button" data-query="edge 005 AND OR NOT" data-mode="lexical">
+              <span class="example-number">04</span>
+              <span><strong>Handle safely</strong><small>EDGE-005 · FTS operators</small></span>
+            </button>
           </div>
         </div>
       </form>
     </section>
 
     <section class="results-section" id="results-section" aria-labelledby="results-heading" aria-busy="false">
-      <div class="results-heading-row">
+      <div class="section-heading-row results-heading-row">
         <div>
-          <p class="section-kicker">Results</p>
           <h2 id="results-heading">Search results</h2>
         </div>
         <p class="results-summary" id="results-summary">Enter a query to begin.</p>
@@ -160,28 +200,39 @@
 
       <div class="state-card idle-state" id="idle-state">
         <span class="state-icon" aria-hidden="true">
-          <svg viewBox="0 0 32 32"><path d="M14.3 4a10.3 10.3 0 1 0 7.2 17.5l5.4 5.4 2.1-2.1-5.4-5.4A10.3 10.3 0 0 0 14.3 4Zm0 2.6a7.7 7.7 0 1 1 0 15.4 7.7 7.7 0 0 1 0-15.4Z"/></svg>
+          <svg viewBox="0 0 32 32">
+            <path
+              d="M14.3 4a10.3 10.3 0 1 0 7.2 17.5l5.4 5.4 2.1-2.1-5.4-5.4A10.3 10.3 0 0 0 14.3 4Zm0 2.6a7.7 7.7 0 1 1 0 15.4 7.7 7.7 0 0 1 0-15.4Z" />
+          </svg>
         </span>
-        <h3>Search your local knowledge base</h3>
-        <p>Results stay on this machine. Choose a mode above or start with an example.</p>
+        <p>Enter a query and the local index will mark the first useful coordinates.</p>
       </div>
 
       <div class="state-card loading-state" id="loading-state" hidden>
         <div class="loading-copy">
           <span class="spinner" aria-hidden="true"></span>
-          <div><h3 id="loading-title">Searching…</h3><p id="loading-copy">Ranking local documents.</p></div>
+          <div>
+            <h3 id="loading-title">Searching...</h3>
+            <p id="loading-copy">Ranking local documents.</p>
+          </div>
         </div>
         <div class="skeleton-list" aria-hidden="true">
-          <div class="skeleton-card"><span></span><div><i></i><i></i><i></i></div></div>
-          <div class="skeleton-card"><span></span><div><i></i><i></i><i></i></div></div>
-          <div class="skeleton-card"><span></span><div><i></i><i></i><i></i></div></div>
+          <div class="skeleton-card"><span></span>
+            <div><i></i><i></i><i></i></div>
+          </div>
+          <div class="skeleton-card"><span></span>
+            <div><i></i><i></i><i></i></div>
+          </div>
+          <div class="skeleton-card"><span></span>
+            <div><i></i><i></i><i></i></div>
+          </div>
         </div>
       </div>
 
       <div class="state-card no-index-state" id="no-index-state" hidden>
         <span class="state-icon warning" aria-hidden="true">!</span>
         <h3>No index is loaded</h3>
-        <p>Create a free local index, then restart the service:</p>
+        <p>Build a local index, then restart the service:</p>
         <code>onefind index ./sample-data --db demo.db --embed</code>
         <code>onefind serve --db demo.db</code>
       </div>
@@ -189,7 +240,11 @@
       <div class="state-card empty-state" id="empty-state" hidden>
         <span class="state-icon" aria-hidden="true">0</span>
         <h3>No matching documents</h3>
-        <p id="empty-copy">Try fewer words, a related phrase, or another retrieval mode.</p>
+        <p id="empty-copy">Try fewer words, a related phrase, or another route.</p>
+        <div class="no-answer-guidance">
+          <strong>Nearest matches</strong>
+          <span>Keyword mode needs every query term. Meaning and Hybrid can still find related concepts.</span>
+        </div>
       </div>
 
       <div class="state-card error-state" id="error-state" hidden>
@@ -201,15 +256,19 @@
 
       <ol class="results-list" id="results-list" hidden></ol>
     </section>
+
+
   </main>
 
   <footer class="site-footer">
-    <p><strong>OneFind</strong> keeps lexical and semantic retrieval in one local SQLite file.</p>
-    <p>No cloud search · No tracking · Free to run</p>
+    <p class="footer-mark"><span class="tiny-dot blue" aria-hidden="true"></span> OneFind <span
+        class="footer-separator">/</span> </p>
+    <nav aria-label="Footer navigation">
+      <a href="#search-input">Search</a>
+      <a href="#results-section">Result</a>
+    </nav>
   </footer>
 
-  <noscript>
-    <div class="noscript-message">This demo needs JavaScript for local search requests.</div>
-  </noscript>
 </body>
+
 </html>
