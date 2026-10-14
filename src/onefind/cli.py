@@ -315,24 +315,22 @@ def cmd_sweep_alpha(args: argparse.Namespace) -> int:
 def cmd_smoke(args: argparse.Namespace) -> int:
     from .evaluate import run_smoke
 
-    extra: dict[str, Any] = {}
-    match = getattr(args, "match", None)
-    if match is not None:
-        if not _accepts(run_smoke, "lexical_match"):
-            raise UsageError("this build's smoke evaluation does not support --match yet")
-        extra["lexical_match"] = match
+    # Same keyword matching as the app and 'onefind search': "auto" for
+    # lexical/hybrid cases ("all" for semantic) unless --match says otherwise.
+    match = getattr(args, "match", None) or "auto"
     result = run_smoke(
         args.db,
         args.queries,
         k=args.k,
         model_name=args.model,
-        **extra,
+        lexical_match=match,
     )
     print(f"smoke cases       : {result['cases']}")
     print(f"answerable cases  : {result['answerable']}")
     print(f"hit@3             : {result['hit_at_3']:.3f}")
     print(f"MRR@{args.k}          : {result['mrr_at_k']:.3f}")
     print(f"no-answer accuracy: {result['no_answer_accuracy']:.3f}")
+    print(f"keyword matching  : {result.get('lexical_match', match)}")
     for row in result["rows"]:
         outcome = "—" if row["rank"] is None else str(row["rank"])
         print(f"  {row['mode']:<8} rank={outcome:>2}  {row['query']}")
@@ -1099,6 +1097,10 @@ def cmd_status(args: argparse.Namespace) -> int:
                     root["changes"] = {"error": str(exc)}
         last_run = index.last_run()
         last_indexed = index.last_indexed_at()
+        from .watcher import get_preference
+
+        auto_sync = "on" if get_preference(index) else "off"
+        passages = _passage_state(index)
     try:
         size = target.db.stat().st_size
     except OSError:
@@ -1124,6 +1126,10 @@ def cmd_status(args: argparse.Namespace) -> int:
             "roots": roots,
             "last_run": last_run,
             "last_indexed_at": last_indexed,
+            "auto_sync": auto_sync,
+            "chunking": passages["chunking"],
+            "long_notes": passages["long_notes"],
+            "vectors_need_rebuild": passages["rebuild"],
         }, indent=2))
         return EXIT_OK
 
@@ -1136,6 +1142,14 @@ def cmd_status(args: argparse.Namespace) -> int:
     )
     print(f"  notes    : {documents}, vectors: {vector_text}")
     print(f"  health   : {state} - {sentence}")
+    print(
+        f"  auto-sync: {auto_sync}"
+        + (" (the web app keeps this collection up to date)" if auto_sync == "on" else "")
+    )
+    print(f"  passages : {_passage_line(passages)}")
+    hint = _passage_hint(passages, opts)
+    if hint:
+        print(f"             {hint}")
     if roots:
         print("  folders  :")
         for root in roots:
@@ -1222,11 +1236,16 @@ def cmd_doctor(args: argparse.Namespace) -> int:
             )
             report = index.integrity_check()
         _print_integrity(report)
+        passages = _passage_state(index)
+    opts = _target_opts(target, target.name or _name_for_db(args, target.db))
+    hint = _passage_hint(passages, opts)
+    if hint:
+        # Not damage: the index is consistent, but meaning search is limited.
+        print(f"  passages      : {hint}")
     if report["ok"]:
         print("no problems found")
         return EXIT_OK
     if not args.repair:
-        opts = _target_opts(target, target.name or _name_for_db(args, target.db))
         print(f"fix what can be fixed with: onefind doctor --repair{opts}")
     return EXIT_DATA
 
@@ -1285,7 +1304,369 @@ def cmd_remove(args: argparse.Namespace) -> int:
     return EXIT_OK
 
 
+# -- passages / rebuild-vectors (docs/11 section 9) ---------------------------------------
+
+
+def _passage_state(index) -> dict:
+    """Passage setting, long-note count and pending rebuild of a collection."""
+    try:
+        rebuild = index.vectors_need_rebuild()
+        return {
+            "chunking": index.chunking_config(),
+            "long_notes": int(rebuild.get("long_notes") or 0),
+            "rebuild": rebuild,
+            "vectors": index.has_vectors(),
+        }
+    except (OneFindError, sqlite3.Error):
+        return {"chunking": None, "long_notes": 0, "rebuild": None, "vectors": index.has_vectors()}
+
+
+def _passage_line(state: dict) -> str:
+    config = state.get("chunking")
+    long_notes = int(state.get("long_notes") or 0)
+    if config:
+        split = (
+            f"; {_plural(long_notes, 'long note')} split into passages" if long_notes else ""
+        )
+        return (
+            f"on ({config['max_words']} words, {config['overlap_words']} overlap{split})"
+        )
+    if long_notes:
+        return (
+            f"off - one vector per note; meaning search reads only the beginning of "
+            f"{_plural(long_notes, 'note')} longer than 200 words"
+        )
+    return "off - one vector per note"
+
+
+def _passage_hint(state: dict | None, opts: str) -> str:
+    """A one-line notice when a vector rebuild is needed or recommended ('' otherwise)."""
+    rebuild = (state or {}).get("rebuild") or {}
+    if rebuild.get("needed"):
+        what = "vectors" if (state or {}).get("vectors") else "search passages"
+        return (
+            f"rebuild needed: {_plural(int(rebuild.get('documents') or 0), 'note')} still "
+            f"follow an older passage setting. Fix: onefind rebuild-vectors{opts} "
+            f"(updates the {what})"
+        )
+    if rebuild.get("recommended") and (state or {}).get("vectors"):
+        long_notes = int(rebuild.get("long_notes") or 0)
+        return (
+            f"recommended: {_plural(long_notes, 'note')} {'is' if long_notes == 1 else 'are'} "
+            "longer than one passage; split them so meaning search reads all of each: "
+            f"onefind rebuild-vectors{opts} --chunking default"
+        )
+    return ""
+
+
+def cmd_rebuild_vectors(args: argparse.Namespace) -> int:
+    """Re-split long notes into passages and rebuild their vectors."""
+    target = _resolve_target(args, must_exist=True, allow_active=True)
+    name = target.name or _name_for_db(args, target.db)
+    opts = _target_opts(target, name)
+    printer: ProgressPrinter | _Silent = (
+        _Silent() if getattr(args, "quiet", False) else ProgressPrinter()
+    )
+    cancel = threading.Event()
+    with _open_index(target) as index:
+        try:
+            with _ctrl_c_cancels(cancel, "rebuilding vectors"):
+                if index.has_vectors():
+                    if not index.vec_ready:
+                        raise EnvError(
+                            "sqlite-vec cannot be loaded here, so the vectors of "
+                            f"{_label(target)} cannot be rebuilt; run 'onefind check' for the fix"
+                        )
+                    from .embed import DEFAULT_MODEL
+
+                    model_name = index.get_meta("model_name") or DEFAULT_MODEL
+                    print(f"loading embedding model: {model_name} ...")
+                    embedder = _load_embedder(model_name)
+                    if cancel.is_set():  # Ctrl+C while the model was loading
+                        raise OperationCancelled("rebuilding vectors was cancelled")
+                    index.attach_embedder(embedder, progress=printer, cancel=cancel.is_set)
+                if args.chunking != "keep":
+                    setting = index.set_chunking(None if args.chunking == "off" else "default")
+                    print(
+                        "passage search: "
+                        + (f"on ({setting['max_words']} words per passage)" if setting else "off")
+                    )
+                result = index.rebuild_vectors(progress=printer, cancel=cancel.is_set)
+        except (OperationCancelled, KeyboardInterrupt):
+            printer.finish()
+            _note(
+                "cancelled: rebuilding vectors stopped early. Notes finished so far keep their "
+                f"new passages; run 'onefind rebuild-vectors{opts}' again to finish."
+            )
+            return EXIT_CANCELLED
+        except BaseException:
+            printer.finish()
+            raise
+        printer.finish()
+        rebuilt = int(result.get("rebuilt") or 0)
+        config = result.get("chunking")
+        if rebuilt:
+            vectors = (
+                f", {_plural(int(result.get('vectors_embedded') or 0), 'vector')} built"
+                if index.has_vectors()
+                else " (keyword-only collection: no vectors to build)"
+            )
+            print(
+                f"rebuilt {_plural(rebuilt, 'note')} into "
+                f"{_plural(int(result.get('passages') or 0), 'passage')}{vectors} -> {_label(target)}"
+            )
+        else:
+            print(f"vectors are up to date: no note needed new passages ({_label(target)})")
+        if result.get("skipped"):
+            _note(
+                f"note: {_plural(int(result['skipped']), 'note')} changed while rebuilding "
+                "and already use the current setting"
+            )
+        print(
+            "  passages : "
+            + (
+                f"on ({config['max_words']} words, {config['overlap_words']} overlap)"
+                if config
+                else "off (one vector per note)"
+            )
+        )
+    return EXIT_OK
+
+
+# -- folders (the collection's registered roots) --------------------------------------------
+
+
+def _find_folder(index, wanted: str) -> dict:
+    """A registered folder by id (as listed) or path; DataError (exit 4) when unknown."""
+    text = str(wanted).strip()
+    roots = index.roots()
+    if text.isdigit():
+        for root in roots:
+            if root["root_id"] == int(text):
+                return root
+    candidates = [text]
+    try:
+        candidates.append(str(Path(text).expanduser().resolve()))
+    except (OSError, RuntimeError, ValueError):
+        pass
+
+    def key(value: str) -> str:
+        cleaned = value.replace("\\", "/").rstrip("/")
+        return cleaned.casefold() if sys.platform == "win32" else cleaned
+
+    for candidate in candidates:
+        for root in roots:
+            if key(root["path"]) == key(candidate):
+                return root
+    listed = ", ".join(f"{root['root_id']}: {root['path']}" for root in roots) or "none"
+    raise DataError(
+        f"{text!r} is not a folder of this collection (folders: {listed}); "
+        "see 'onefind folders list'"
+    )
+
+
+def cmd_folders_list(args: argparse.Namespace) -> int:
+    target = _resolve_target(args, must_exist=True, allow_active=True)
+    name = target.name or _name_for_db(args, target.db)
+    opts = _target_opts(target, name)
+    with _open_index(target) as index:
+        roots = index.roots()
+    from .watcher import is_network_root
+
+    for root in roots:
+        network = is_network_root(root["path"])
+        root["network"] = network
+        # Never touch a network share just to list folders.
+        root["exists"] = None if network else Path(root["path"]).is_dir()
+    if getattr(args, "json", False):
+        print(json.dumps({"collection": name, "folders": roots}, indent=2))
+        return EXIT_OK
+    if not roots:
+        print(f"{_label(target)} has no folders yet; add one with: onefind index FOLDER{opts}")
+        return EXIT_OK
+    print(f"folders of {name or target.db.name}:")
+    for root in roots:
+        state = (
+            "network folder (not checked)"
+            if root["network"]
+            else "missing - moved or deleted?"
+            if not root["exists"]
+            else "ok"
+        )
+        print(f"  [{root['root_id']}] {root['path']}")
+        details = [
+            _plural(root["documents"], "note"),
+            f"indexed {_when(root['last_indexed_at'])}",
+            state,
+        ]
+        if root.get("files_only"):
+            details.append("single files only")
+        print(f"      {', '.join(details)}")
+        if root["exclude"]:
+            print(f"      excluding: {', '.join(root['exclude'])}")
+    missing = [root for root in roots if root["exists"] is False]
+    if missing:
+        print(
+            "a folder moved? point it at its new place (notes keep their ids): "
+            f"onefind folders relocate OLD NEW{opts}"
+        )
+        print(f"gone for good? forget it: onefind folders remove FOLDER{opts}")
+    return EXIT_OK
+
+
+def cmd_folders_remove(args: argparse.Namespace) -> int:
+    target = _resolve_target(args, must_exist=True, allow_active=True)
+    name = target.name or _name_for_db(args, target.db)
+    opts = _target_opts(target, name)
+    keep = bool(getattr(args, "keep_documents", False))
+    with _open_index(target) as index:
+        root = _find_folder(index, args.folder)
+        report = index.forget_root(root["root_id"], delete_documents=not keep)
+        total = index.count("documents")
+    if keep:
+        print(
+            f"forgot the folder {root['path']}; its {_plural(root['documents'], 'note')} "
+            "stay searchable but are no longer updated"
+        )
+    else:
+        print(
+            f"removed the folder {root['path']} and its {_plural(report['removed'], 'note')} "
+            "from the index; files on disk were not touched"
+        )
+    print(f"  collection : {name or target.db.name} now holds {_plural(total, 'note')}")
+    print(f"  add it back: onefind index {_quote(root['path'])}{opts}")
+    return EXIT_OK
+
+
+def cmd_folders_relocate(args: argparse.Namespace) -> int:
+    target = _resolve_target(args, must_exist=True, allow_active=True)
+    name = target.name or _name_for_db(args, target.db)
+    opts = _target_opts(target, name)
+    new = Path(args.new).expanduser()
+    try:
+        new = new.resolve()
+    except (OSError, RuntimeError):
+        pass
+    if not new.is_dir():
+        raise DataError(
+            f"the folder {new} does not exist; give the folder the notes were moved to"
+        )
+    with _open_index(target) as index:
+        root = _find_folder(index, args.old)
+        updated = index.relocate_root(root["root_id"], str(new))
+    print(f"moved folder [{updated['root_id']}]: {root['path']} -> {updated['path']}")
+    print(
+        f"  {_plural(updated['documents'], 'note')} keep their ids, bookmarks and vectors; "
+        f"pick up edits made meanwhile with: onefind index {_quote(updated['path'])}{opts} --prune"
+    )
+    return EXIT_OK
+
+
 # -- serve ---------------------------------------------------------------------------
+
+
+# -- watch (auto-sync in the foreground) -------------------------------------------------
+
+
+class _WatchPrinter:
+    """Turns auto-sync events into one concise, timestamped line each."""
+
+    def __init__(self, out: TextIO | None = None) -> None:
+        self.out = out
+        self.lock = threading.Lock()
+
+    def line(self, text: str) -> None:
+        stamp = datetime.datetime.now().strftime("%H:%M:%S")
+        with self.lock:
+            print(f"{stamp}  {text}", file=self.out or sys.stdout, flush=True)
+
+    def __call__(self, event: dict) -> None:
+        kind = event.get("type")
+        folder = Path(str(event.get("root") or "")).name or str(event.get("root") or "")
+        if kind == "changes":
+            parts = [
+                f"{event.get(key, 0)} {key}" for key in ("new", "changed", "deleted")
+                if event.get(key)
+            ]
+            self.line(f"{folder}: {', '.join(parts) or 'changes'} - syncing")
+        elif kind == "synced":
+            counts = ", ".join(
+                f"{event.get(key, 0)} {key}" for key in ("added", "updated", "removed")
+            )
+            self.line(f"{folder}: synced ({counts}) in {event.get('seconds', 0):.1f} s")
+        elif kind in {"paused", "error"} and event.get("message"):
+            self.line(f"{kind}: {event['message']}")
+
+
+def cmd_watch(args: argparse.Namespace) -> int:
+    """Keep a collection's index up to date until Ctrl+C (or --duration)."""
+    from .jobs import JobManager
+    from .watcher import AutoSync, get_preference, is_network_root, set_preference
+
+    target = _resolve_target(args, must_exist=True, allow_active=True)
+    name = target.name or _name_for_db(args, target.db)
+    opts = _target_opts(target, name)
+    with _open_index(target) as index:  # a normal open upgrades older files first
+        if args.set is not None:
+            set_preference(index, args.set == "on")
+            print(
+                f"auto-sync {args.set} for {_label(target)}"
+                + (" - 'onefind serve' keeps it up to date" if args.set == "on" else "")
+            )
+            return EXIT_OK
+        roots = index.roots()
+        saved = get_preference(index)
+    if not roots:
+        raise DataError(
+            f"{_label(target)} has no folders to watch yet; index one first: "
+            f"onefind index FOLDER{opts}"
+        )
+    if args.interval is not None and not args.interval > 0:
+        raise UsageError("--interval must be greater than 0 seconds")
+    if args.duration is not None and args.duration < 0:
+        raise UsageError("--duration cannot be negative")
+    network = [root["path"] for root in roots if is_network_root(root["path"])]
+    printer = _WatchPrinter()
+    jobs = JobManager()
+    sync = AutoSync(
+        jobs, interval=args.interval, allow_network=args.allow_network, on_event=printer
+    )
+    watched = len(roots) - (0 if args.allow_network else len(network))
+    print(
+        f"watching {_label(target)}: {_plural(watched, 'folder')}, checking every "
+        f"{sync.interval:g} s. Press Ctrl+C to stop."
+    )
+    if network and not args.allow_network:
+        _note(
+            f"skipping {_plural(len(network), 'network folder')} (pass --allow-network to "
+            "poll folders on other computers)"
+        )
+    if not saved:
+        _note(
+            "note: auto-sync is off for this collection in the web app; "
+            f"'onefind watch --set on{opts}' turns it on there too"
+        )
+    stop = threading.Event()
+    deadline = time.monotonic() + args.duration if args.duration is not None else None
+    code = EXIT_OK
+    with _ctrl_c_cancels(stop, "watching"):
+        try:
+            sync.start(target.db)
+            while not stop.is_set():
+                if deadline is not None and time.monotonic() >= deadline:
+                    break
+                if not sync.running(target.db):
+                    status = sync.status(target.db)
+                    _note(f"stopped: {status.get('message') or 'the collection is gone'}")
+                    code = EXIT_DATA
+                    break
+                wait = 0.25 if deadline is None else max(0.0, min(0.25, deadline - time.monotonic()))
+                stop.wait(wait)
+        finally:
+            sync.shutdown()
+            jobs.shutdown()
+    print("stopped watching")
+    return code
 
 
 def _accepts(function: Callable[..., Any], *names: str) -> bool:
@@ -1397,6 +1778,8 @@ def cmd_serve(args: argparse.Namespace) -> int:
         extra["home"] = home
     if no_open:
         extra["allow_open"] = False
+    if getattr(args, "no_auto_sync", False):
+        extra["autosync"] = False
     if extra and not _accepts(create_app, *extra):
         raise UsageError(
             "this build's web app needs --db FILE (library mode, --home, --no-open and "
@@ -1664,8 +2047,9 @@ def build_parser() -> argparse.ArgumentParser:
     p_smoke.add_argument("--k", type=int, default=5)
     p_smoke.add_argument("--model", default=None)
     p_smoke.add_argument(
-        "--match", choices=["all", "any", "auto"], default=None,
-        help="keyword matching for lexical/hybrid cases (default: the evaluator's own)",
+        "--match", choices=["all", "any", "auto"], default="auto",
+        help="keyword matching for lexical/hybrid cases (default auto, the same as the app; "
+             "semantic cases always use all)",
     )
     p_smoke.set_defaults(func=cmd_smoke)
 
@@ -1698,8 +2082,81 @@ def build_parser() -> argparse.ArgumentParser:
     p_serve.add_argument("--reset-token", default=None, dest="reset_token",
                          help="token required to POST /api/reset, 16-256 characters "
                               "(random if omitted)")
+    p_serve.add_argument(
+        "--no-auto-sync", action="store_true", dest="no_auto_sync",
+        help="never watch folders, even for collections whose auto-sync is on",
+    )
     p_serve.add_argument("--log-level", default="warning", dest="log_level")
     p_serve.set_defaults(func=cmd_serve)
+
+    p_watch = sub.add_parser(
+        "watch",
+        help="keep a collection up to date while notes change (auto-sync in the foreground)",
+    )
+    _add_target_args(p_watch, default_note=fallback)
+    p_watch.add_argument(
+        "--interval", type=float, default=None, metavar="SECONDS",
+        help="seconds between folder checks (default 5; large folders are checked less often)",
+    )
+    p_watch.add_argument(
+        "--duration", type=float, default=None, metavar="SECONDS",
+        help="stop after this many seconds (default: run until Ctrl+C)",
+    )
+    p_watch.add_argument(
+        "--allow-network", action="store_true", dest="allow_network",
+        help="also poll folders on other computers (UNC paths, mapped network drives)",
+    )
+    p_watch.add_argument(
+        "--set", choices=["on", "off"], default=None,
+        help="only save the collection's auto-sync preference (used by 'onefind serve') and exit",
+    )
+    p_watch.set_defaults(func=cmd_watch)
+
+    p_rebuild = sub.add_parser(
+        "rebuild-vectors",
+        help="split long notes into passages and rebuild their vectors (meaning search)",
+    )
+    _add_target_args(p_rebuild, default_note=fallback)
+    p_rebuild.add_argument(
+        "--chunking", choices=["keep", "default", "off"], default="keep",
+        help="keep the collection's passage setting (default), turn passage search on "
+             "(default: 200-word passages), or off (one vector per note)",
+    )
+    p_rebuild.add_argument(
+        "-q", "--quiet", action="store_true", help="no live progress on stderr"
+    )
+    p_rebuild.set_defaults(func=cmd_rebuild_vectors)
+
+    p_folders = sub.add_parser(
+        "folders", help="list, remove or relocate the folders a collection indexes"
+    )
+    f_sub = p_folders.add_subparsers(dest="folders_command", required=True)
+    f_list = f_sub.add_parser("list", help="show the collection's folders and saved exclusions")
+    _add_target_args(f_list, default_note=fallback)
+    f_list.add_argument("--json", action="store_true", help="machine-readable list")
+    f_list.set_defaults(func=cmd_folders_list)
+    f_remove = f_sub.add_parser(
+        "remove", help="forget a folder (moved or deleted); files on disk are never touched"
+    )
+    f_remove.add_argument("folder", metavar="FOLDER", help="folder path or its [id] from 'folders list'")
+    _add_target_args(f_remove, default_note=fallback)
+    f_keep = f_remove.add_mutually_exclusive_group()
+    f_keep.add_argument(
+        "--delete-documents", action="store_false", dest="keep_documents",
+        help="also remove the folder's notes from the index (default)",
+    )
+    f_keep.add_argument(
+        "--keep-documents", action="store_true", dest="keep_documents",
+        help="keep the folder's notes searchable (they are no longer updated)",
+    )
+    f_remove.set_defaults(func=cmd_folders_remove, keep_documents=False)
+    f_relocate = f_sub.add_parser(
+        "relocate", help="point a moved folder at its new place (notes keep their ids)"
+    )
+    f_relocate.add_argument("old", metavar="OLD", help="the folder's old path or its [id]")
+    f_relocate.add_argument("new", metavar="NEW", help="where the folder is now")
+    _add_target_args(f_relocate, default_note=fallback)
+    f_relocate.set_defaults(func=cmd_folders_relocate)
 
     return parser
 

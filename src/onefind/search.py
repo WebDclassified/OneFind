@@ -109,6 +109,13 @@ class Hit:
     # Explanations are presentation data: they never take part in equality,
     # hashing, or ordering, so existing Hit comparisons keep working.
     explain: dict | None = field(default=None, compare=False, hash=False, repr=False)
+    # Passage chunking (v1.2.1): for hits found by meaning search, the seq of
+    # the note's best-matching passage, how many passages the note has, and
+    # that passage's text when the note has more than one (snippets build
+    # from it). Presentation data like ``explain``; None when unknown.
+    passage_seq: int | None = field(default=None, compare=False, hash=False, repr=False)
+    passage_count: int | None = field(default=None, compare=False, hash=False, repr=False)
+    passage: str | None = field(default=None, compare=False, hash=False, repr=False)
 
 
 @dataclass
@@ -599,13 +606,14 @@ def _require_embedder(index):
     return index.embedder
 
 
-def _metadata_for_rows(index, row_ids: list[int]) -> dict[int, tuple[str, str, str | None]]:
+def _metadata_for_rows(index, row_ids: list[int]) -> dict[int, tuple[str, str, str | None, int]]:
+    """chunk row_id -> (doc_id, title, source, passage seq)."""
     if not row_ids:
         return {}
     placeholders = ",".join("?" for _ in row_ids)
     rows = index.conn.execute(
         f"""
-        SELECT c.row_id, c.doc_id, d.title, d.source
+        SELECT c.row_id, c.doc_id, c.seq, d.title, d.source
         FROM chunks c
         JOIN documents d ON d.doc_id = c.doc_id
         WHERE c.row_id IN ({placeholders})
@@ -613,46 +621,83 @@ def _metadata_for_rows(index, row_ids: list[int]) -> dict[int, tuple[str, str, s
         row_ids,
     ).fetchall()
     return {
-        int(row["row_id"]): (str(row["doc_id"]), str(row["title"] or ""), row["source"])
+        int(row["row_id"]): (
+            str(row["doc_id"]),
+            str(row["title"] or ""),
+            row["source"],
+            int(row["seq"]),
+        )
         for row in rows
     }
 
 
+# Best passage per note while scanning: doc_id -> (score, seq, title, source).
+_DocBest = dict[str, tuple[float, int, str, "str | None"]]
+
+
+def _keep_best(best: _DocBest, doc_id: str, score: float, seq: int,
+               title: str, source: str | None) -> None:
+    """Record a passage score; a note keeps its highest one (lowest seq on ties)."""
+    current = best.get(doc_id)
+    if current is None or score > current[0] or (score == current[0] and seq < current[1]):
+        best[doc_id] = (score, seq, title, source)
+
+
+def _best_hits(best: _DocBest, k: int) -> list[Hit]:
+    ranked = sorted(best.items(), key=lambda item: (-item[1][0], item[0]))[:k]
+    return [
+        Hit(doc_id=doc_id, title=title, score=score, snippet="", source=source,
+            passage_seq=seq)
+        for doc_id, (score, seq, title, source) in ranked
+    ]
+
+
+# sqlite-vec refuses KNN queries with k above this; deeper searches scan exactly.
+_KNN_LIMIT = 4096
+
+
 def _native_float_search(index, query_vector, k: int):
-    """Use sqlite-vec's cosine KNN path for full-precision vectors."""
+    """Use sqlite-vec's cosine KNN path for full-precision vectors.
+
+    The KNN runs over passages; a note scores its best passage. When notes
+    have several passages, enough neighbours are fetched for ``k`` distinct
+    notes (expanding until found or the index is exhausted); one-passage
+    collections fetch exactly ``k`` rows as before.
+    """
     from .embed import serialize_float32
 
     vector_count = index.count("vectors")
     if vector_count == 0:
         return []
-    query_k = min(k, vector_count)
-    rows = index.conn.execute(
-        """
-        SELECT rowid, distance
-        FROM vec_float
-        WHERE embedding MATCH ? AND k = ?
-        ORDER BY distance ASC
-        """,
-        (serialize_float32(query_vector), query_k),
-    ).fetchall()
-    metadata = _metadata_for_rows(index, [int(row["rowid"]) for row in rows])
-    hits: list[Hit] = []
-    for row in rows:
-        row_id = int(row["rowid"])
-        doc_id, title, source = metadata.get(row_id, ("", "", None))
-        if not doc_id:
-            continue
-        hits.append(
-            Hit(
-                doc_id=doc_id,
-                title=title,
-                score=1.0 - float(row["distance"]),
-                snippet="",
-                source=source,
-            )
-        )
-    hits.sort(key=lambda hit: (-hit.score, hit.doc_id))
-    return hits[:k]
+    documents = max(1, index.count("documents"))
+    if vector_count <= documents:
+        query_k = min(k, vector_count)
+    else:
+        query_k = min(vector_count, int(math.ceil(k * vector_count / documents)) + k)
+    query_blob = serialize_float32(query_vector)
+    while True:
+        if query_k > _KNN_LIMIT:
+            return _application_side_search(index, query_vector, k, "float")
+        rows = index.conn.execute(
+            """
+            SELECT rowid, distance
+            FROM vec_float
+            WHERE embedding MATCH ? AND k = ?
+            ORDER BY distance ASC
+            """,
+            (query_blob, query_k),
+        ).fetchall()
+        metadata = _metadata_for_rows(index, [int(row["rowid"]) for row in rows])
+        best: _DocBest = {}
+        for row in rows:
+            info = metadata.get(int(row["rowid"]))
+            if info is None:
+                continue
+            doc_id, title, source, seq = info
+            _keep_best(best, doc_id, 1.0 - float(row["distance"]), seq, title, source)
+        if len(best) >= k or query_k >= vector_count or len(rows) < query_k:
+            return _best_hits(best, k)
+        query_k = min(vector_count, query_k * 2)
 
 
 def _vector_blocks(index, filters: SearchFilters | None = None,
@@ -777,7 +822,8 @@ def _application_side_search(index, query_vector, k: int, precision: str,
         return -((matrix > 0) != query_bits).sum(axis=1).astype(np.float64)
 
     block_iter = iter(_vector_blocks(index) if blocks is None else blocks)
-    best: list[Hit] = []
+    best: _DocBest = {}
+    threshold: float | None = None  # score of the k-th best note so far
     try:
         for matrix, row_ids in block_iter:
             similarities = score(matrix)
@@ -785,51 +831,101 @@ def _application_side_search(index, query_vector, k: int, precision: str,
             if not np.isfinite(similarities).all():
                 raise UsageError("quantized search produced non-finite scores")
 
-            # Only rows that can still reach the top k need metadata. Keeping
-            # every score tied with the k-th best preserves the doc_id tie-break.
-            candidates = np.arange(len(row_ids))
-            if len(row_ids) > k:
-                kth = np.partition(similarities, len(row_ids) - k)[len(row_ids) - k]
-                candidates = np.nonzero(similarities >= kth)[0]
+            # Rows are passages and a note scores its best one. Only rows
+            # that can still reach the top k notes need metadata: visit them
+            # best first until this block has offered k distinct notes, then
+            # finish the rows tied with that score (doc_id tie-break) and
+            # stop. Rows below the k-th best note so far are skipped.
+            order = np.argsort(-similarities, kind="stable")
+            if threshold is not None:
+                order = order[similarities[order] >= threshold]
+            seen: set[str] = set()
+            cutoff: float | None = None
+            position = 0
+            step = max(2 * k, 16)
+            while position < order.size:
+                window = order[position : position + step]
+                position += window.size
+                if cutoff is not None:
+                    window = window[similarities[window] >= cutoff]
+                    if window.size == 0:
+                        break
+                candidate_rows = [row_ids[int(item)] for item in window]
+                metadata = _metadata_for_rows(index, candidate_rows)
+                for item, row_id in zip(window, candidate_rows):
+                    info = metadata.get(row_id)
+                    if info is None:
+                        continue
+                    doc_id, title, source, seq = info
+                    value = float(similarities[int(item)])
+                    _keep_best(best, doc_id, value, seq, title, source)
+                    seen.add(doc_id)
+                    if cutoff is None and len(seen) >= k:
+                        cutoff = value
+                step *= 4
+            if len(best) > k:
+                ranked = sorted(best.items(), key=lambda pair: (-pair[1][0], pair[0]))[:k]
+                best = dict(ranked)
             if len(best) >= k:
-                candidates = candidates[similarities[candidates] >= best[-1].score]
-            if candidates.size == 0:
-                continue
-            candidate_rows = [row_ids[int(position)] for position in candidates]
-            metadata = _metadata_for_rows(index, candidate_rows)
-            for position, row_id in zip(candidates, candidate_rows):
-                doc_id, title, source = metadata.get(row_id, ("", "", None))
-                if not doc_id:
-                    continue
-                best.append(
-                    Hit(
-                        doc_id=doc_id,
-                        title=title,
-                        score=float(similarities[int(position)]),
-                        snippet="",
-                        source=source,
-                    )
-                )
-            best.sort(key=lambda hit: (-hit.score, hit.doc_id))
-            del best[k:]
+                threshold = min(value[0] for value in best.values())
     finally:
         # End the scan's read transaction promptly, also when ranking fails.
         close = getattr(block_iter, "close", None)
         if close is not None:
             close()
 
-    return best
+    return _best_hits(best, k)
+
+
+def _attach_passages(index, hits: list[Hit]) -> list[Hit]:
+    """Fill ``passage_count`` (and ``passage`` for multi-passage notes) on hits.
+
+    Only hits that know their best passage (``passage_seq``) are touched;
+    one indexed point query per multi-passage hit.
+    """
+    conn = getattr(index, "conn", None)
+    wanted = [hit.doc_id for hit in hits if hit.passage_seq is not None]
+    if conn is None or not wanted:
+        return hits
+    counts: dict[str, int] = {}
+    unique = list(dict.fromkeys(wanted))
+    for start in range(0, len(unique), 500):
+        part = unique[start : start + 500]
+        for doc_id, count in conn.execute(
+            f"SELECT doc_id, COUNT(*) FROM chunks WHERE doc_id IN ({','.join('?' for _ in part)}) "  # noqa: S608
+            "GROUP BY doc_id",
+            part,
+        ):
+            counts[str(doc_id)] = int(count)
+    result: list[Hit] = []
+    for hit in hits:
+        count = counts.get(hit.doc_id) if hit.passage_seq is not None else None
+        if count is None:
+            result.append(hit)
+            continue
+        text = None
+        if count > 1:
+            row = conn.execute(
+                "SELECT text FROM chunks WHERE doc_id = ? AND seq = ?",
+                (hit.doc_id, hit.passage_seq),
+            ).fetchone()
+            text = str(row[0]) if row is not None else None
+        result.append(replace(hit, passage_count=count, passage=text))
+    return result
 
 
 def semantic_search(index, query: str, k: int = 10, precision: str = "float",
                     _query_vector=None, *,
-                    filters: SearchFilters | dict | None = None) -> list[Hit]:
+                    filters: SearchFilters | dict | None = None,
+                    _with_passages: bool = True) -> list[Hit]:
     """Return semantic neighbors in float, int8, or binary precision.
 
     Unfiltered float search uses sqlite-vec KNN. With ``filters`` every
     precision runs an exact block scan restricted to the allowed rows, so a
     restrictive filter never loses matches the way post-filtering a KNN
-    top-k would.
+    top-k would. Notes split into passages are ranked by their best passage
+    (max similarity); each hit carries ``passage_seq``/``passage_count``
+    and, for multi-passage notes, the best passage's text.
     """
     _validate_k(k)
     cleaned_query = query.strip()
@@ -842,16 +938,18 @@ def semantic_search(index, query: str, k: int = 10, precision: str = "float",
     embedder = _require_embedder(index)
     query_vector = embedder.encode_query(cleaned_query) if _query_vector is None else _query_vector
     if active_filters is not None:
-        return _application_side_search(
+        hits = _application_side_search(
             index,
             query_vector,
             k,
             precision,
             blocks=_vector_blocks(index, active_filters),
         )
-    if precision == "float":
-        return _native_float_search(index, query_vector, k)
-    return _application_side_search(index, query_vector, k, precision)
+    elif precision == "float":
+        hits = _native_float_search(index, query_vector, k)
+    else:
+        hits = _application_side_search(index, query_vector, k, precision)
+    return _attach_passages(index, hits) if _with_passages else hits
 
 
 # ---- fusion --------------------------------------------------------------------
@@ -932,7 +1030,14 @@ def _rerank_candidates(index, hits: list[Hit], k: int, query_vector) -> list[Hit
     rescored: list[Hit] = []
     for hit in hits:
         vector = vectors.get(hit.doc_id)
-        similarity = float(np.dot(vector, query_vector)) if vector is not None else -2.0
+        seq = hit.passage_seq
+        if vector is None:
+            similarity = -2.0
+        else:
+            # A note split into passages scores its best passage.
+            scores = np.atleast_2d(vector) @ np.asarray(query_vector)
+            seq = int(np.argmax(scores))
+            similarity = float(scores[seq])
         rescored.append(
             Hit(
                 doc_id=hit.doc_id,
@@ -940,6 +1045,7 @@ def _rerank_candidates(index, hits: list[Hit], k: int, query_vector) -> list[Hit
                 score=similarity,
                 snippet=hit.snippet,
                 source=hit.source,
+                passage_seq=seq,
             )
         )
     rescored.sort(key=lambda hit: (-hit.score, hit.doc_id))
@@ -973,11 +1079,16 @@ def _float_similarities(index, query_vector, doc_ids: list[str]) -> dict[str, fl
     result: dict[str, float] = {}
     for doc_id in doc_ids:
         vector = vectors.get(doc_id)
-        if vector is None or vector.shape != query.shape:
+        if vector is None:
             continue
-        values = np.asarray(vector, dtype=np.float64)
-        norm = float(np.linalg.norm(values))
-        cosine = float(values @ query) / (norm * query_norm) if norm else 0.0
+        values = np.atleast_2d(np.asarray(vector, dtype=np.float64))
+        if values.shape[1:] != query.shape or values.shape[0] == 0:
+            continue
+        # A note split into passages is as similar as its best passage.
+        norms = np.linalg.norm(values, axis=1)
+        safe = np.where(norms == 0, 1.0, norms)
+        cosines = np.where(norms == 0, 0.0, (values @ query) / (safe * query_norm))
+        cosine = float(cosines.max())
         if math.isfinite(cosine):
             result[doc_id] = cosine
     return result
@@ -1169,6 +1280,7 @@ def _execute(index, query: str, *, mode: str, k: int, precision: str, rrf_k: int
                 k=fetch_depth,
                 precision=precision,
                 _query_vector=query_vector,
+                _with_passages=False,  # attached below, for the final hits only
                 **filter_kwargs,
             )
 
@@ -1201,6 +1313,7 @@ def _execute(index, query: str, *, mode: str, k: int, precision: str, rrf_k: int
                 sources.setdefault(hit.doc_id, hit.source)
                 if hit.snippet:
                     snippets.setdefault(hit.doc_id, hit.snippet)
+            best_passages = {hit.doc_id: hit.passage_seq for hit in semantic_hits}
 
             fused_hits = [
                 Hit(
@@ -1209,6 +1322,7 @@ def _execute(index, query: str, *, mode: str, k: int, precision: str, rrf_k: int
                     score=score,
                     snippet=snippets.get(doc_id, ""),
                     source=sources.get(doc_id),
+                    passage_seq=best_passages.get(doc_id),
                 )
                 for doc_id, score in fused
             ]
@@ -1219,6 +1333,9 @@ def _execute(index, query: str, *, mode: str, k: int, precision: str, rrf_k: int
                 hits = _rerank_candidates(index, fused_hits, k, query_vector=query_vector)
         else:
             hits = fused_hits
+
+    if mode != "lexical":
+        hits = _attach_passages(index, hits)
 
     if not (explain or need_confidence):
         return SearchOutcome(hits=hits, stages=clock.records, relaxed=relaxed,
@@ -1293,6 +1410,10 @@ def _execute(index, query: str, *, mode: str, k: int, precision: str, rrf_k: int
                 reasons.append("Found by keyword search only")
             else:
                 reasons.append("Found by meaning search only")
+        passage_seq = hit.passage_seq if (in_semantic or (mode == "hybrid" and rerank)) else None
+        if passage_seq is not None and passage_seq > 0:
+            of_total = f" (passage {passage_seq + 1} of {hit.passage_count})" if hit.passage_count else ""
+            reasons.append(f"Closest passage is further down the note{of_total}")
         if mode != "lexical" and precision in ("int8", "binary"):
             label = "int8" if precision == "int8" else "binary (1-bit)"
             reasons.append(f"Compared using {label} vectors")
@@ -1311,6 +1432,11 @@ def _execute(index, query: str, *, mode: str, k: int, precision: str, rrf_k: int
             "fused_score": _rounded(fused_scores.get(hit.doc_id)) if mode == "hybrid" else None,
             "confidence": confidence,
             "reasons": reasons,
+            # Passage chunking: which passage of the note matched best by
+            # meaning (0 = the beginning; None for keyword-only hits) and how
+            # many passages the note has.
+            "best_passage_seq": passage_seq,
+            "passages": hit.passage_count if mode != "lexical" else None,
         }
         if terms:
             details["keyword_coverage"] = (

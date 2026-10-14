@@ -516,7 +516,9 @@ class Walkthrough:
         self.archive_db = self.elsewhere / "archive.db"
         self.bulk = self.elsewhere / "bulk"
         self.extra = self.elsewhere / "travel"
-        self.env = {**os.environ, "ONEFIND_HOME": str(self.home), "PYTHONIOENCODING": "utf-8"}
+        # Auto-sync polls every 0.5 s here (5 s by default) so its step stays quick.
+        self.env = {**os.environ, "ONEFIND_HOME": str(self.home), "PYTHONIOENCODING": "utf-8",
+                    "ONEFIND_AUTOSYNC_INTERVAL": "0.5"}
         self.server = Server(self.scratch, self.home, args.port, self.env)
         self.c: Checker | None = None
         self.page: Page | None = None
@@ -602,8 +604,10 @@ class Walkthrough:
             ("indexing: add a folder, full rebuild, cancel", self.indexing_more),
             ("wizard keeps a folder's saved exclusions", self.wizard_keeps_excludes),
             ("index a single file and a JSONL dataset", self.single_files),
+            ("long notes: split into passages, rebuild vectors, passage preview", self.long_notes),
             ("folder queue, stale home lists, missing folders", self.folder_queue),
             ("remove a document from the index", self.remove_document),
+            ("auto-sync: enable in Manage, new note becomes searchable", self.auto_sync),
             ("theme and reduced motion", self.theme_and_motion),
             ("responsive layouts", self.responsive),
             ("error state when the server stops", self.server_down),
@@ -669,6 +673,10 @@ class Walkthrough:
         page.fill("#index-exclude", "drafts")
         page.fill("#index-name", "My Notes")
         c.check(page.is_checked("#index-embed"), "vectors are on by default")
+        c.check(page.is_checked("#index-autosync"), "auto-sync is on by default for a new collection")
+        # The walkthrough edits this folder behind the app's back to check stale
+        # detection; auto-sync gets its own step later (enabled from Manage).
+        page.uncheck("#index-autosync")
         c.check(not layout_problems(page), f"layout: {layout_problems(page)}")
         c.shot("02-wizard-choose-light")
 
@@ -1617,7 +1625,25 @@ class Walkthrough:
         page.fill("#fs-path", str(self.notes))
         page.press("#fs-path", "Enter")
         page.wait_for_selector("#fs-crumbs .crumb-current:has-text('notes')")
-        c.check(page.input_value("#index-exclude") == "", "the exclude field starts empty")
+        # An already indexed folder shows its saved patterns (they are not sent unless edited).
+        wait_js(page, "document.getElementById('index-exclude').value === 'drafts'", timeout=10000)
+        c.check(True, "the exclude field is pre-filled with the folder's saved patterns")
+        c.check("Options · 1 saved exclusion" in text(page, "#index-options-summary"),
+                f"the Options summary says patterns are saved: {text(page, '#index-options-summary')!r}")
+        c.check("Editing them replaces the saved patterns" in text(page, "#exclude-help"),
+                f"the help explains what editing does: {text(page, '#exclude-help')!r}")
+        page.click(".disclosure summary:has-text('Options')")
+        c.shot("05b-wizard-saved-excludes-light")
+        # Another folder (not indexed yet) clears the pre-fill again.
+        page.fill("#fs-path", str(self.extra.parent))
+        page.press("#fs-path", "Enter")
+        page.wait_for_selector("#fs-crumbs .crumb-current:has-text('elsewhere')")
+        c.check(page.input_value("#index-exclude") == "", "a folder without saved patterns shows an empty field")
+        page.fill("#fs-path", str(self.notes))
+        page.press("#fs-path", "Enter")
+        page.wait_for_selector("#fs-crumbs .crumb-current:has-text('notes')")
+        wait_js(page, "document.getElementById('index-exclude').value === 'drafts'", timeout=10000)
+        page.click(".disclosure summary:has-text('Options')")
         page.click("#index-start")
         page.wait_for_selector("#index-dialog[data-step='done']", timeout=120000)
         summary = self.done_summary()
@@ -1729,6 +1755,149 @@ class Walkthrough:
         self._module("views-header.js", "m.switchCollection('My Notes')")
         wait_js(page, "document.getElementById('collection-name').textContent === 'My Notes'")
         self.server.api("POST", "/api/collections/remove", {"name": "Files", "delete_file": True, "confirm_name": "Files"})
+        clear_toasts(page)
+
+    def long_notes(self) -> None:
+        """A collection made before passage search: the gentle offer, the rebuild job, the passage preview."""
+        page, c = self.page, self.c
+        from onefind.store import Index
+
+        folder = self.elsewhere / "field-journal"
+        folder.mkdir(parents=True, exist_ok=True)
+        filler = ("Notes about the weekly market: bread, cheese, apples and pears were on sale, "
+                  "and the stalls opened early because of the warm weather.")
+        paragraphs = ["# Island field journal", "The ferry left on time and the crossing was calm."]
+        paragraphs += [f"Day {n}. {filler}" for n in range(1, 50)]
+        paragraphs.insert(40, "On Rottnest Island the quokka colony shelters under the peppermint "
+                              "trees; rangers count every quokka each spring near the salt lakes.")
+        (folder / "island-journal.md").write_text("\n\n".join(paragraphs) + "\n", encoding="utf-8")
+        (folder / "packing.md").write_text("# Packing\n\nSunscreen, hat and a water bottle.\n", encoding="utf-8")
+
+        created = self.server.api("POST", "/api/collections", {"name": "Long notes"})
+        db = created.get("db") or next(item["db"] for item in self.server.api("GET", "/api/collections")["collections"]
+                                       if item["name"] == "Long notes")
+        with Index.open(db) as index:  # as collections made before 1.2.1: one vector per note
+            index.set_chunking(None)
+        self._module("views-header.js", "m.switchCollection('Long notes')")
+        wait_js(page, "document.getElementById('collection-name').textContent === 'Long notes'")
+        job = self.server.api("POST", "/api/index", {"path": str(folder), "embed": True,
+                                                     "collection": "Long notes", "auto_sync": False})
+        c.check(self._wait_job(job, timeout=180)["status"] == "succeeded", "the old-style collection was indexed")
+        stats = self.server.api("GET", "/api/stats")
+        c.check(stats["chunking"] is None and stats["vectors_need_rebuild"]["recommended"] is True,
+                f"stats recommend passage search: {stats['chunking']} {stats['vectors_need_rebuild']}")
+        self._module("app.js", "m.refreshStats()")
+
+        # 1. The gentle offer in Manage -> Health.
+        open_manage(page, "health")
+        page.wait_for_selector("#passage-callout[data-kind='improve']", timeout=15000)
+        callout = text(page, "#passage-callout")
+        c.check("Improve meaning search for long notes" in callout and "1 note is longer than one passage" in callout,
+                f"the callout explains the offer: {callout!r}")
+        c.check("only the beginning" in text(page, "#manage-health-content"), "the Long notes row says what is missing")
+        c.check(not layout_problems(page), f"layout: {layout_problems(page)}")
+        c.shot("29-manage-long-notes-light")
+
+        # 2. "Split long notes" runs a rebuild job in the progress dialog.
+        page.click("#passage-callout button:has-text('Split long notes')")
+        page.wait_for_selector("#index-dialog[open]")
+        page.wait_for_selector("#index-dialog[data-step='progress'], #index-dialog[data-step='done']", timeout=20000)
+        labels = [t.strip() for t in page.locator("#job-steps .stepper-label").all_text_contents()]
+        c.check(labels == ["Find long notes", "Split long notes", "Build vectors", "Ready"] or
+                page.get_attribute("#index-dialog", "data-step") == "done",
+                f"the stepper uses rebuild labels: {labels}")
+        if page.get_attribute("#index-dialog", "data-step") == "progress":
+            c.check(page.locator("#index-foot button:has-text('Cancel rebuild')").count() == 1,
+                    "the rebuild can be cancelled")
+        page.wait_for_selector("#index-dialog[data-step='done']", timeout=180000)
+        c.check(text(page, "#index-title") == "Vectors rebuilt", f"done title: {text(page, '#index-title')!r}")
+        c.check(self.done_summary().get("Notes updated") == "1", f"rebuild summary: {self.done_summary()}")
+        c.check("passage by passage" in text(page, "#done-copy"), f"done copy: {text(page, '#done-copy')!r}")
+        c.shot("29b-rebuild-done-light")
+        page.click("#index-foot button:has-text('Close')")
+        page.wait_for_selector("#index-dialog", state="hidden")
+        wait_js(page, "!document.getElementById('passage-callout')", timeout=20000)
+        c.check(True, "the offer goes away once long notes are split")
+        health_text = page.evaluate("[...document.getElementById('manage-health-content').childNodes]"
+                                    ".filter((n) => n.nodeType === 3).map((n) => n.textContent).join('|')")
+        c.check(not health_text.strip(), f"Health has no stray text (e.g. 'null'): {health_text!r}")
+        c.check("searched passage by passage" in text(page, "#manage-health-content"),
+                f"Health says long notes are split: {text(page, '#manage-health-content')[:300]!r}")
+        stats = self.server.api("GET", "/api/stats")
+        c.check(stats["chunking"] is not None and stats["passages"] > stats["documents"],
+                f"passages after the rebuild: {stats['passages']} for {stats['documents']} notes")
+
+        # 3. A pending rebuild (the setting changed) offers "Rebuild vectors" in Maintenance.
+        with Index.open(db) as index:
+            index.set_chunking({"max_words": 120, "overlap_words": 20})
+        self._module("app.js", "m.refreshStats()")
+        page.wait_for_selector("#passage-callout[data-kind='rebuild']", timeout=15000)
+        c.check("Vectors need a rebuild" in text(page, "#passage-callout"), f"rebuild callout: {text(page, '#passage-callout')!r}")
+        page.click(".sheet-nav [data-section='manage-maintenance']")
+        page.wait_for_selector("#manage-maintenance-content button:has-text('Rebuild vectors')")
+        page.click("#manage-maintenance-content button:has-text('Rebuild vectors')")
+        page.wait_for_selector("#index-dialog[data-step='done']", timeout=180000)
+        c.check(text(page, "#index-title") == "Vectors rebuilt", "the pending rebuild finishes")
+        page.click("#index-foot button:has-text('Close')")
+        page.wait_for_selector("#index-dialog", state="hidden")
+        wait_js(page, "!document.getElementById('passage-callout')", timeout=20000)
+        close_manage(page)
+
+        # 4. Results and preview point at the passage further down the note.
+        page.check("#mode-group input[value='semantic']", force=True)
+        view = search(page, "where do the quokkas shelter on the island")
+        titles = result_titles(page)
+        c.check(view == "results" and bool(titles) and titles[0] == "Island field journal",
+                f"meaning search finds the answer deep in the long note: {titles[:3]}")
+        gap = page.evaluate("""() => {
+            const head = document.getElementById('results-head').getBoundingClientRect().top;
+            const modes = document.getElementById('mode-group').getBoundingClientRect().bottom;
+            const between = [...document.querySelectorAll('.search-area *, #results-pane > *')]
+              .filter((n) => n.getClientRects().length && n.getBoundingClientRect().top > modes
+                && n.getBoundingClientRect().bottom < head && n.getBoundingClientRect().height > 8)
+              .map((n) => (n.id ? '#' + n.id : n.className) + ':' + Math.round(n.getBoundingClientRect().height));
+            return { space: Math.round(head - modes), between: between.slice(0, 8) };
+        }""")
+        c.check(gap["space"] < 120, f"no empty band above the results: {gap}")
+        card = page.locator("#results-list .result-card").first
+        card.locator(".why-button").click()
+        reasons = " | ".join(card.locator(".why-reasons li").all_text_contents())
+        c.check(re.search(r"Closest passage is further down the note \(passage \d+ of \d+\)", reasons) is not None,
+                f"the explanation names the passage: {reasons!r}")
+        card.locator(".why-button").click()
+        card.locator("button:has-text('Preview')").click()
+        page.wait_for_selector("#preview:not([hidden])")
+        wait_js(page, "document.getElementById('preview-title').textContent !== 'Loading…'")
+        page.wait_for_timeout(400)
+        where = page.evaluate("""() => {
+            const body = document.getElementById('preview-body');
+            const label = document.getElementById('preview-passage-label');
+            const passage = [...body.querySelectorAll('.preview-paragraph.is-passage')];
+            if (!label || !passage.length) return null;
+            const b = body.getBoundingClientRect(), l = label.getBoundingClientRect();
+            return { label: label.textContent, paragraphs: passage.length,
+                     text: passage.map((p) => p.textContent).join(' '),
+                     scrolled: body.scrollTop, inView: l.bottom > b.top && l.top < b.bottom };
+        }""")
+        c.check(bool(where) and where["paragraphs"] > 0 and "Rottnest" in where["text"],
+                f"the preview marks the matched passage: {where and where['label']} ({where and where['paragraphs']} paragraphs)")
+        c.check(bool(where) and re.match(r"^Closest passage · \d+ of \d+$", where["label"]) is not None,
+                f"the passage is labelled: {where and where['label']!r}")
+        c.check(bool(where) and where["scrolled"] > 0 and where["inView"], f"the preview scrolls to the passage: {where and {k: where[k] for k in ('scrolled', 'inView')}}")
+        c.check(not layout_problems(page), f"layout: {layout_problems(page)}")
+        c.shot("29c-preview-passage-light")
+        page.keyboard.press("Escape")
+        page.wait_for_selector("#preview", state="hidden")
+        page.locator("#search-input").focus()
+        page.keyboard.press("Escape")
+        wait_view(page, "idle")
+        # Back to the default mode (a plain click: the app may re-render the group meanwhile).
+        page.locator("#mode-group input[value='hybrid']").evaluate("(node) => node.click()")
+        wait_js(page, "document.querySelector(\"#mode-group input[value='hybrid']\").checked", timeout=10000)
+        self._module("views-header.js", "m.switchCollection('My Notes')")
+        wait_js(page, "document.getElementById('collection-name').textContent === 'My Notes'")
+        self.server.api("POST", "/api/collections/remove", {"name": "Long notes", "delete_file": True, "confirm_name": "Long notes"})
+        wait_view(page, "idle")
         clear_toasts(page)
 
     def folder_queue(self) -> None:
@@ -1920,6 +2089,88 @@ class Walkthrough:
         page.wait_for_selector("#index-dialog", state="hidden")
         close_manage(page)
         c.check(self.server.api("GET", "/api/documents/" + doc_id).get("doc_id") == doc_id, "updating the index adds it back")
+        clear_toasts(page)
+
+    def auto_sync(self) -> None:
+        page, c = self.page, self.c
+        status = self.server.api("GET", "/api/autosync")
+        c.check(status.get("enabled") is False, f"auto-sync was left off by the wizard: {status}")
+        c.check(not visible(page, "#status-sync"), "the pill has no auto-sync note while it is off")
+        open_manage(page, "health")
+        page.wait_for_selector("#autosync-toggle")
+        block = text(page, "#manage-autosync")
+        c.check("checks your folders every few seconds" in block and "stays on this computer" in block,
+                f"the switch explains itself: {block!r}")
+        c.check(not page.is_checked("#autosync-toggle"), "the switch shows auto-sync off")
+        page.check("#autosync-toggle")
+        deadline = time.time() + 10
+        while time.time() < deadline and not self.server.api("GET", "/api/autosync").get("enabled"):
+            page.wait_for_timeout(100)
+        c.check(self.server.api("GET", "/api/autosync").get("enabled") is True, "the switch turns auto-sync on")
+        wait_js(page, "document.getElementById('autosync-status').textContent.startsWith('On')", timeout=10000)
+        c.check(True, f"Manage says it is on: {text(page, '#autosync-status')!r}")
+        c.shot("27-manage-autosync-light")
+        close_manage(page)
+        wait_js(page, "document.getElementById('status-sync').textContent.includes('Auto-sync on')", timeout=15000)
+        c.check(visible(page, "#status-sync"), "the header pill says auto-sync is on")
+        c.check(text(page, "#status-label") == "Ready", f"the pill still leads with Ready: {text(page, '#status-label')!r}")
+
+        # A note written into the watched folder becomes searchable on its own.
+        note = self.notes / "Personal" / "quetzal-sighting.md"
+        note.write_text("# Quetzal sighting\n\nA resplendent quetzal in the cloud forest canopy.\n",
+                        encoding="utf-8")
+        labels: set[str] = set()
+        found = False
+        deadline = time.time() + 60
+        while time.time() < deadline:
+            labels.add(text(page, "#status-label"))
+            hits = self.server.api("POST", "/api/search", {"query": "quetzal", "mode": "lexical", "k": 5})
+            if any(item["doc_id"].endswith("quetzal-sighting.md") for item in hits.get("results", [])):
+                found = True
+                break
+            page.wait_for_timeout(150)
+        c.check(found, "the new note was indexed by auto-sync")
+        jobs = self.server.api("GET", "/api/jobs")["jobs"]
+        c.check(any(job.get("label") == "Auto-sync" and job.get("status") == "succeeded" for job in jobs),
+                "an 'Auto-sync' job did the work")
+        c.check(not any(label.startswith("Indexing") for label in labels),
+                f"auto-sync never shows the full indexing status: {sorted(labels)}")
+        wait_js(page, "document.getElementById('status-label').textContent === 'Ready'", timeout=20000)
+        wait_js(page, "document.getElementById('status-sync').textContent.includes('Auto-sync on')", timeout=20000)
+        c.check(True, "the pill settles back on 'Ready · Auto-sync on'")
+        c.check(not page.locator("#index-dialog[open]").count(), "no indexing dialog popped up")
+        c.check(not re.search(r"Index ready", toast_text(page)), f"no 'Index ready' toast: {toast_text(page)!r}")
+        view = search(page, "quetzal cloud forest")
+        titles = result_titles(page)
+        c.check(view == "results" and "Quetzal sighting" in titles, f"the UI finds the new note: {view} {titles}")
+        c.shot("28-autosync-searchable-light")
+        page.locator("#search-input").focus()
+        page.keyboard.press("Escape")
+        wait_view(page, "idle")
+
+        # Deleting it is picked up too; then auto-sync is turned off again.
+        note.unlink()
+        deadline = time.time() + 60
+        while time.time() < deadline:
+            try:
+                self.server.api("GET", "/api/documents/Personal/quetzal-sighting.md")
+            except urllib.error.HTTPError as exc:
+                if exc.code == 404:
+                    break
+            page.wait_for_timeout(150)
+        else:
+            c.check(False, "the deleted note left the index")
+        open_manage(page, "health")
+        wait_js(page, "document.getElementById('autosync-status').textContent.includes('last synced')", timeout=20000)
+        c.check(True, f"Manage shows the last sync: {text(page, '#autosync-status')!r}")
+        page.uncheck("#autosync-toggle")
+        deadline = time.time() + 10
+        while time.time() < deadline and self.server.api("GET", "/api/autosync").get("enabled"):
+            page.wait_for_timeout(100)
+        c.check(self.server.api("GET", "/api/autosync").get("enabled") is False, "the switch turns auto-sync off")
+        close_manage(page)
+        wait_js(page, "document.getElementById('status-sync').hidden", timeout=15000)
+        c.check(text(page, "#status-label") == "Ready", "the pill is back to plain 'Ready'")
         clear_toasts(page)
 
     def theme_and_motion(self) -> None:

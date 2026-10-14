@@ -110,6 +110,19 @@ export function collectionStatus(stats = state.stats) {
   return stats.documents === 0 && stats.health ? "empty" : "no_index";
 }
 
+/**
+ * True when a newer auto-sync run finished for the same collection since the
+ * previous stats (`syncs` counts runs that changed something).
+ */
+export function autoSyncFinished(previous, stats) {
+  const sync = stats?.auto_sync;
+  const syncs = Number(sync?.syncs);
+  const collection = stats?.collection?.name ?? null;
+  if (!Number.isFinite(syncs)) return { finished: false, next: { collection, syncs: null } };
+  const finished = previous?.collection === collection && Number.isFinite(previous?.syncs) && syncs > previous?.syncs;
+  return { finished, next: { collection, syncs } };
+}
+
 export function canSearch(stats = state.stats) {
   if (!stats || stats.offline) return false;
   if (stats.ready) return true;

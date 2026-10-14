@@ -348,8 +348,27 @@ def best_passage(body: str, query: str, *, max_chars: int = DEFAULT_PASSAGE_CHAR
     return passage
 
 
+def _hint_window(hint: str, body: str | None, query: str, max_chars: int) -> str:
+    """Best window of a matched passage, with ``…`` where the note goes on."""
+    window = best_passage(hint, query, max_chars=max_chars)
+    if not window or not body:
+        return window
+    stripped = hint.strip()
+    located = body.find(stripped) if stripped else -1
+    before = located > 0 and bool(body[:located].strip())
+    after = located >= 0 and bool(body[located + len(stripped):].strip())
+    if located < 0:
+        before = after = True
+    if before and not window.startswith(ELLIPSIS):
+        window = f"{ELLIPSIS} {window}"
+    if after and not window.endswith(ELLIPSIS):
+        window = f"{window} {ELLIPSIS}"
+    return window
+
+
 def build_snippet(hit: Any, body: str | None, query: str, *,
-                  max_chars: int = DEFAULT_PASSAGE_CHARS) -> list[dict[str, object]]:
+                  max_chars: int = DEFAULT_PASSAGE_CHARS,
+                  passage: str | None = None) -> list[dict[str, object]]:
     """Highlight segments for one search result.
 
     Uses the best passage of the document body; falls back to the FTS
@@ -358,17 +377,35 @@ def build_snippet(hit: Any, body: str | None, query: str, *,
     when no body is available. An FTS snippet that only repeats the hit's
     title (the query matched the title column, not the body) is skipped in
     favour of the body passage, which the card does not already show.
+
+    ``passage`` (default: the hit's ``passage`` attribute, set by meaning
+    search for notes split into passages) is the part of a long note that
+    matched by meaning. It is tried first, so a meaning match shows the
+    relevant part of the note rather than its first lines; it is also used
+    unhighlighted when neither it nor the body contains a query word.
     """
+    hint = passage if passage is not None else _attr(hit, "passage")
+    hint_segments: list[dict[str, object]] = []
+    if hint and hint.strip():
+        window = _hint_window(hint, body, query, max_chars)
+        hint_segments = segments_with_terms(window, query, max_chars=len(window) or 1)
+        if any(segment["highlight"] for segment in hint_segments):
+            return hint_segments
     fts_snippet = _attr(hit, "snippet")
     segments: list[dict[str, object]] = []
     if body and body.strip():
-        passage = best_passage(body, query, max_chars=max_chars)
-        segments = segments_with_terms(passage, query, max_chars=len(passage) or 1)
+        passage_text = best_passage(body, query, max_chars=max_chars)
+        segments = segments_with_terms(passage_text, query, max_chars=len(passage_text) or 1)
         if any(segment["highlight"] for segment in segments):
             return segments
-    if fts_snippet and (FTS_START in fts_snippet or not segments):
-        if segments and _repeats_title(fts_snippet, _attr(hit, "title")):
-            return segments
+    if (fts_snippet and FTS_START in fts_snippet
+            and not (segments and _repeats_title(fts_snippet, _attr(hit, "title")))):
+        return _unmark_stopwords(segments_from_fts(fts_snippet), query)
+    if hint_segments:
+        # Nothing to highlight in the body: the passage that matched by
+        # meaning beats the note's first lines.
+        return hint_segments
+    if fts_snippet and not segments:
         return _unmark_stopwords(segments_from_fts(fts_snippet), query)
     return segments
 

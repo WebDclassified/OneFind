@@ -53,6 +53,7 @@ from .snippets import (
     segments_with_terms,
 )
 from .store import Index, utcnow_iso
+from .watcher import AUTO_SYNC_LABEL, AutoSync, get_preference, set_preference
 
 _STATIC_DIR = Path(__file__).with_name("static")
 # Legacy aliases: snippet logic now lives in onefind.snippets.
@@ -228,6 +229,12 @@ if SERVE_AVAILABLE:
         # file by file; "folder": always index the whole folder.
         scope: str = Field(default="auto")
         confirm_network: bool = False
+        # The wizard's "Keep this collection up to date automatically" box;
+        # null leaves the collection's saved auto-sync preference alone.
+        auto_sync: bool | None = None
+        # The collection the request was made for (the UI sends it): a
+        # queued update must never land in a collection switched to since.
+        collection: str | None = Field(default=None, max_length=200)
 
         @field_validator("scope")
         @classmethod
@@ -235,6 +242,22 @@ if SERVE_AVAILABLE:
             if value not in {"auto", "folder"}:
                 raise ValueError("scope must be 'auto' or 'folder'")
             return value
+
+    class RebuildVectorsBody(BaseModel):  # type: ignore[misc, valid-type]
+        # "keep": the current passage setting; "default": turn passage search
+        # on (long notes are split); "off": one vector per note again.
+        chunking: str = Field(default="keep")
+
+        @field_validator("chunking")
+        @classmethod
+        def _chunking_ok(cls, value: str) -> str:
+            value = str(value).strip().lower()
+            if value not in {"keep", "default", "off"}:
+                raise ValueError("chunking must be 'keep', 'default' or 'off'")
+            return value
+
+    class AutoSyncBody(BaseModel):  # type: ignore[misc, valid-type]
+        enabled: bool
 
     class RootRemoveBody(BaseModel):  # type: ignore[misc, valid-type]
         root_id: int | None = None
@@ -532,8 +555,7 @@ def list_directory(raw_path: str | None) -> dict:
                 if is_dir:
                     dirs.append(entry.name)
                 else:
-                    supported = os.path.splitext(entry.name)[1].lower() in SUPPORTED_SUFFIXES
-                    files.append((entry.name, supported))
+                    files.append((entry.name, os.path.splitext(entry.name)[1].lower()))
     except PermissionError as exc:
         raise ApiProblem(
             403,
@@ -550,9 +572,12 @@ def list_directory(raw_path: str | None) -> dict:
         {"name": name, "path": str(target / name), "kind": "dir", "supported": False}
         for name in dirs
     ]
+    # "supported": the file can be indexed on its own (notes and .jsonl
+    # datasets); "supported_files" counts what indexing the folder reads
+    # (datasets are only read when picked one by one).
     entries += [
-        {"name": name, "path": str(target / name), "kind": "file", "supported": supported}
-        for name, supported in files
+        {"name": name, "path": str(target / name), "kind": "file", "supported": suffix in SUPPORTED_FILES}
+        for name, suffix in files
     ]
     total = len(entries)
     parent = target.parent if target.parent != target else None
@@ -576,8 +601,23 @@ def list_directory(raw_path: str | None) -> dict:
         "total": total,
         "truncated": total > MAX_FS_ENTRIES,
         "places": places,
-        "supported_files": sum(1 for _name, supported in files if supported),
+        "supported_files": sum(1 for _name, suffix in files if suffix in SUPPORTED_SUFFIXES),
     }
+
+
+def _passage_payload(hit: Any) -> dict | None:
+    """The passage a meaning match came from, for a note split into several.
+
+    ``{"seq": i, "count": n, "text": str}`` (seq 0 = the beginning), or None
+    for keyword-only hits and one-passage notes. The preview uses ``text`` to
+    find and mark the passage in the full note.
+    """
+    seq = getattr(hit, "passage_seq", None)
+    count = getattr(hit, "passage_count", None)
+    text = getattr(hit, "passage", None)
+    if seq is None or not count or int(count) < 2 or not text:
+        return None
+    return {"seq": int(seq), "count": int(count), "text": str(text)}
 
 
 def _public_job(job: dict | None) -> dict | None:
@@ -762,6 +802,8 @@ class _Runtime:
         embedders: EmbedderCache,
         reset_token: str | None,
         allow_open: bool,
+        autosync: bool = True,
+        autosync_interval: float | None = None,
     ) -> None:
         self.lock = threading.RLock()
         self.index_path = index_path
@@ -769,6 +811,9 @@ class _Runtime:
         self.register = register
         self.embedders = embedders
         self.jobs = JobManager(embedders)
+        # One watcher at most: it follows the active collection (contract §10).
+        self.autosync = AutoSync(self.jobs, interval=autosync_interval)
+        self.autosync_allowed = bool(autosync)
         self.reset_token = reset_token
         self.allow_open = allow_open
         self.index: Index | None = None
@@ -794,8 +839,11 @@ class _Runtime:
                         "registered": True,
                     }
             self._open_active()
+            self.follow_autosync()
 
     def shutdown(self) -> None:
+        # Watchers first: they would otherwise start new jobs while jobs stop.
+        self.autosync.shutdown(timeout=10.0)
         self.jobs.shutdown(timeout=5.0)
         with self.lock:
             self._close_index()
@@ -844,6 +892,8 @@ class _Runtime:
         except (OneFindError, sqlite3.Error, OSError):
             logger.warning("could not open collection %s", self.active["name"], exc_info=True)
             self.index = None
+            return
+        self.follow_autosync()
 
     def _close_index(self) -> None:
         if self.index is not None:
@@ -880,6 +930,10 @@ class _Runtime:
 
     def ensure_not_busy(self, db: str | Path | None = None) -> None:
         target = db if db is not None else (self.active["db"] if self.active else None)
+        if target is not None:
+            # A manual action always wins over auto-sync: its job is cancelled
+            # (finished batches stay) and the watcher waits a moment.
+            self.autosync.preempt(target)
         if target is not None and self.jobs.active_for(target) is not None:
             raise ApiProblem(
                 409,
@@ -918,6 +972,81 @@ class _Runtime:
         self._close_index()
         self.index = new_index
         self.active = {"name": entry["name"], "db": db, "registered": True}
+        self.follow_autosync()
+
+    # -- auto-sync ---------------------------------------------------------------
+
+    def _autosync_target(self) -> Path | None:
+        if self.active is None or self.index is None:
+            return None
+        return Path(self.active["db"])
+
+    def autosync_preference(self) -> bool:
+        """The active collection's saved auto-sync preference (lock held)."""
+        if self.index is None:
+            return False
+        try:
+            return get_preference(self.index)
+        except (OneFindError, sqlite3.Error):
+            return False
+
+    def follow_autosync(self) -> None:
+        """Watch the active collection when its preference is on; stop the rest."""
+        target = self._autosync_target()
+        for db in self.autosync.watched():
+            if target is None or _path_key(db) != _path_key(target):
+                self.autosync.stop(db)
+        if target is None:
+            return
+        if self.autosync_allowed and self.autosync_preference():
+            try:
+                self.autosync.start(target)
+            except (OneFindError, OSError):
+                logger.warning("auto-sync could not start", exc_info=True)
+        else:
+            self.autosync.stop(target)
+
+    def stop_autosync(self, db: str | Path | None = None) -> None:
+        """Stop watching ``db`` (default: the active collection) before file surgery."""
+        target = db if db is not None else (self.active["db"] if self.active else None)
+        if target is not None:
+            self.autosync.stop(target)
+
+    def set_autosync(self, enabled: bool) -> dict:
+        """Save the preference in the active collection and start/stop watching."""
+        with self.using_index() as index:
+            set_preference(index, bool(enabled))
+            self.follow_autosync()
+            return self.autosync_payload()
+
+    def autosync_payload(self) -> dict:
+        """Auto-sync status of the active collection (never contains the db path)."""
+        with self.lock:
+            target = Path(self.active["db"]) if self.active is not None else None
+            enabled = self.autosync_preference()
+            status = (
+                self.autosync.status(target) if target is not None else self.autosync.blank_status()
+            )
+            running = target is not None and self.autosync.running(target)
+            available = target is not None and self.index is not None
+        status["enabled"] = enabled
+        status["available"] = available
+        if enabled and not running:
+            status["state"] = "paused"
+            status["message"] = (
+                "Auto-sync is turned off for this server (--no-auto-sync)."
+                if not self.autosync_allowed
+                else status.get("message") or "Auto-sync is not running."
+            )
+        if not enabled:
+            status["state"] = "idle"
+            status["message"] = ""
+            status["pending"] = {"new": 0, "changed": 0, "deleted": 0}
+            status["progress"] = None
+        if target is not None and status.get("message"):
+            for spelling in {str(target), str(target.absolute())}:
+                status["message"] = status["message"].replace(spelling, "the collection file")
+        return status
 
     def ensure_embedder(self, model_name: str) -> float:
         """Load the shared model outside the index lock; returns load time (ms)."""
@@ -964,6 +1093,10 @@ class _Runtime:
         with self.lock:
             active = self.active
             job = self.active_job()
+            if job is not None and job.get("label") == AUTO_SYNC_LABEL:
+                # Auto-sync is background upkeep: it shows in "auto_sync", and
+                # the collection stays "ready" instead of "indexing".
+                job = None
             index = self.current_index()
             payload: dict[str, Any] = {
                 "ready": False,
@@ -986,7 +1119,15 @@ class _Runtime:
                 "job": _public_job(job),
                 "vectors_missing": 0,
                 "vectors_unavailable": False,
+                # Passage chunking (docs/11 section 9). long_notes = notes longer
+                # than one passage (stats()["long_notes"]); notes_over_model_window
+                # = notes with text the model cannot read (a passage, or a whole
+                # note with chunking off, longer than its window).
                 "long_notes": 0,
+                "notes_over_model_window": 0,
+                "passages": 0,
+                "chunking": None,
+                "vectors_need_rebuild": None,
             }
             healthy = True
             if index is not None:
@@ -1025,7 +1166,11 @@ class _Runtime:
                         roots=snapshot.get("roots", 0),
                         vectors_missing=int(health.get("missing_vectors") or 0),
                         vectors_unavailable=bool(snapshot.get("vectors_unavailable")),
-                        long_notes=int(health.get("long_documents") or 0),
+                        long_notes=int(snapshot.get("long_notes") or 0),
+                        notes_over_model_window=int(health.get("long_documents") or 0),
+                        passages=int(snapshot.get("passages") or 0),
+                        chunking=snapshot.get("chunking"),
+                        vectors_need_rebuild=snapshot.get("vectors_need_rebuild"),
                     )
                     # Missing vectors alone limit meaning search but are not
                     # damage; count mismatches and orphan vectors are.
@@ -1045,6 +1190,7 @@ class _Runtime:
             status, detail = self._status(payload, active, index, job, healthy)
             payload["status"] = status
             payload["status_detail"] = detail
+            payload["auto_sync"] = self.autosync_payload()
             return payload
 
     @staticmethod
@@ -1066,7 +1212,8 @@ class _Runtime:
     def _status(payload: dict, active, index, job, healthy: bool) -> tuple[str, str]:
         if job is not None:
             percent = _job_percent(job)
-            return "indexing", f"Indexing… {percent}%" if percent is not None else "Indexing…"
+            doing = "Rebuilding vectors" if job.get("kind") == "rebuild_vectors" else "Indexing"
+            return "indexing", f"{doing}… {percent}%" if percent is not None else f"{doing}…"
         if active is None:
             return "no_index", "No collection yet. Index a folder to start searching your notes."
         if index is None:
@@ -1102,6 +1249,14 @@ class _Runtime:
             return (
                 "ready",
                 f"{ready} Vectors missing for {_plural(missing, 'note')} — meaning search is limited.",
+            )
+        rebuild = payload.get("vectors_need_rebuild") or {}
+        if payload["vectors"] and rebuild.get("needed"):
+            pending = int(rebuild.get("documents") or 0)
+            return (
+                "ready",
+                f"{ready} Vectors need a rebuild for {_plural(pending, 'note')} — open Manage to "
+                "rebuild them.",
             )
         if payload["vectors"]:
             return "ready", f"{ready} Keyword and meaning search available."
@@ -1409,6 +1564,7 @@ class _Runtime:
                     "bookmarked": index.is_bookmarked(hit.doc_id),
                     "duplicates": index.duplicates_of(hit.doc_id),
                     "confidence": confidence,
+                    "passage": _passage_payload(hit),
                 }
             )
         return results
@@ -1611,6 +1767,8 @@ def create_app(
     opener: Opener | None = None,
     embedders: EmbedderCache | None = None,
     register: bool | None = None,
+    autosync: bool = True,
+    autosync_interval: float | None = None,
 ):
     """Create the local FastAPI application without opening network services.
 
@@ -1620,6 +1778,9 @@ def create_app(
     ``home`` or ``$ONEFIND_HOME`` names the library explicitly, so ad-hoc
     use never edits the per-user registry). ``opener(path, reveal)`` replaces
     the OS file opener and ``embedders`` the shared model cache (tests).
+    ``autosync=False`` never watches folders, whatever a collection's saved
+    auto-sync preference says; ``autosync_interval`` overrides the poll
+    interval (default 5 s, or ``$ONEFIND_AUTOSYNC_INTERVAL``).
     """
     if not SERVE_AVAILABLE:
         raise UsageError('serve needs the [serve] extra - pip install -e ".[serve]"')
@@ -1646,6 +1807,8 @@ def create_app(
         embedders=embedders if embedders is not None else EmbedderCache(),
         reset_token=reset_token,
         allow_open=allow_open,
+        autosync=autosync,
+        autosync_interval=autosync_interval,
     )
 
     @asynccontextmanager
@@ -1668,6 +1831,7 @@ def create_app(
     app.state.allow_open = allow_open
     app.state.embedders = runtime.embedders
     app.state.jobs = runtime.jobs
+    app.state.autosync = runtime.autosync
 
     if allowed_hosts:
         app.add_middleware(TrustedHostMiddleware, allowed_hosts=allowed_hosts)
@@ -1908,6 +2072,7 @@ def create_app(
                     f"To delete the collection file, type its name “{entry['name']}” to confirm.",
                 )
             runtime.ensure_not_busy(entry["db"])
+            runtime.stop_autosync(entry["db"])
             is_active = runtime.active is not None and _path_key(runtime.active["db"]) == _path_key(
                 entry["db"]
             )
@@ -1918,6 +2083,7 @@ def create_app(
             except Exception:
                 if is_active:
                     runtime._open_active()
+                runtime.follow_autosync()
                 raise
             if is_active:
                 runtime.active = None
@@ -1931,6 +2097,7 @@ def create_app(
                             "db": Path(following["db"]),
                             "registered": True,
                         }
+            runtime.follow_autosync()
             return {
                 "removed": entry["name"],
                 "deleted_file": bool(payload.delete_file),
@@ -1966,6 +2133,19 @@ def create_app(
             )
         exclude = normalize_excludes(payload.exclude) if payload.exclude is not None else None
         with runtime.lock:
+            wanted = (payload.collection or "").strip()
+            current = runtime.active["name"] if runtime.active else None
+            # Names are unique regardless of case (library.validate_name).
+            if wanted and (current is None or wanted.casefold() != current.strip().casefold()):
+                # Sent for one collection, but another is active now (switched
+                # in another tab, or while a queue of folders was running).
+                raise ApiProblem(
+                    409,
+                    "collection_changed",
+                    f"“{wanted}” is no longer the open collection, so nothing was indexed. "
+                    "Switch back to it and try again.",
+                    retryable=False,
+                )
             if runtime.active is None:
                 try:
                     base = validate_name(root.stem if root.is_file() else root.name)
@@ -2001,6 +2181,12 @@ def create_app(
                 if "already running" in str(exc):
                     runtime.ensure_not_busy(active["db"])
                 raise
+            if payload.auto_sync is not None:
+                # The watcher starts now but waits for this job to finish.
+                try:
+                    runtime.set_autosync(bool(payload.auto_sync))
+                except (ApiProblem, OneFindError, sqlite3.Error):
+                    logger.warning("could not save the auto-sync preference", exc_info=True)
         return JSONResponse(status_code=202, content=job)
 
     def _find_root(index: Index, root_id: int | None, raw_path: str | None) -> dict:
@@ -2061,6 +2247,64 @@ def create_app(
             updated = index.relocate_root(root["root_id"], str(target))
             return {"root": updated, "previous": root["path"]}
 
+    @app.get("/api/roots")
+    def list_roots() -> dict:
+        """The active collection's folders with their saved exclude patterns.
+
+        No file-system access (the wizard reads it to pre-fill a folder's
+        saved patterns; /api/index/changes is the one that scans folders).
+        """
+        with runtime.lock:
+            index = runtime.current_index()
+            if index is None:
+                return {"roots": []}
+            roots = index.roots()
+        return {
+            "roots": [
+                {
+                    "root_id": root["root_id"],
+                    "path": root["path"],
+                    "exclude": list(root.get("exclude") or []),
+                    "documents": root["documents"],
+                    "added_at": root.get("added_at"),
+                    "last_indexed_at": root.get("last_indexed_at"),
+                    "files_only": bool(root.get("files_only")),
+                    "network": is_network_path(root["path"]),
+                }
+                for root in roots
+            ]
+        }
+
+    @app.post("/api/maintenance/rebuild-vectors", status_code=202)
+    def rebuild_vectors(payload: RebuildVectorsBody = Body(...)):
+        """Re-split notes into passages and re-embed them as a background job.
+
+        ``chunking``: "keep" (rebuild under the current setting), "default"
+        (turn passage search on) or "off" (one vector per note). Polled like
+        an index job (``kind: "rebuild_vectors"``).
+        """
+        with runtime.lock:
+            active = runtime.require_active()
+            if runtime.current_index() is None:
+                raise ApiProblem(
+                    503,
+                    "no_index",
+                    "No index is ready yet. Index a folder to start searching.",
+                    retryable=True,
+                    action="index",
+                )
+            runtime.ensure_not_busy(active["db"])
+            option = None if payload.chunking == "off" else payload.chunking
+            try:
+                job = runtime.jobs.start_rebuild_vectors(
+                    active["db"], chunking=option, label=active["name"]
+                )
+            except UsageError as exc:
+                if "already running" in str(exc):
+                    runtime.ensure_not_busy(active["db"])
+                raise
+        return JSONResponse(status_code=202, content=_public_job(job))
+
     @app.get("/api/jobs")
     def list_jobs(active: str | None = None) -> dict:
         active_only = str(active or "").strip().lower() in {"1", "true", "yes"}
@@ -2073,6 +2317,17 @@ def create_app(
     @app.post("/api/jobs/{job_id}/cancel")
     def cancel_job(job_id: str) -> dict:
         return runtime.jobs.cancel(job_id)
+
+    # -- auto-sync ---------------------------------------------------------------------
+
+    @app.get("/api/autosync")
+    def autosync_status() -> dict:
+        return runtime.autosync_payload()
+
+    @app.post("/api/autosync")
+    def autosync_toggle(payload: AutoSyncBody = Body(...)) -> dict:
+        """Turn auto-sync on/off for the active collection (saved in its file)."""
+        return runtime.set_autosync(payload.enabled)
 
     @app.get("/api/index/changes")
     def index_changes() -> dict:
@@ -2329,6 +2584,7 @@ def create_app(
             if _path_key(source) == _path_key(db):
                 raise ApiProblem(400, "invalid_backup", "That file is the collection itself.")
             runtime.ensure_not_busy(db)
+            runtime.stop_autosync(db)
             safety = None
             index = runtime.current_index()
             if index is not None:
@@ -2349,6 +2605,7 @@ def create_app(
             except OSError as exc:
                 _delete_family(staging)
                 runtime._open_active()
+                runtime.follow_autosync()
                 raise ApiProblem(
                     409,
                     "collection_busy",
@@ -2358,6 +2615,7 @@ def create_app(
                 ) from exc
             _delete_family(staging)
             runtime._open_active()
+            runtime.follow_autosync()
             return {
                 "restored": True,
                 "mode": "replace",
@@ -2402,7 +2660,8 @@ def create_app(
                     f"To clear the collection, type its name “{active['name']}” to confirm.",
                 )
             runtime.ensure_not_busy()
-            index.clear()
+            index.clear()  # also drops the auto-sync preference and every folder
+            runtime.follow_autosync()
             return {"cleared": True, "stats": runtime.stats_payload()}
 
     # -- legacy reset ------------------------------------------------------------------
@@ -2423,6 +2682,7 @@ def create_app(
             active = runtime.require_active()
             runtime.ensure_not_busy()
             db = Path(active["db"])
+            runtime.stop_autosync(db)
             runtime._close_index()
             _delete_family(db)
             runtime.index = Index.open(db)

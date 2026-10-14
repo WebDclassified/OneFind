@@ -19,6 +19,7 @@ const dialog = () => byId("manage-dialog");
 
 let data = { collections: null, backups: [], changes: null, changesState: "idle" };
 let statsSignature = "";
+let autoSyncBusy = false; // a toggle request is on its way
 
 /* ---------- small builders ---------- */
 
@@ -111,6 +112,80 @@ function keepingFocus(containerId, render) {
 
 /* ---------- health ---------- */
 
+/**
+ * What to offer about passages (docs/11 section 9): "rebuild" when stored
+ * vectors follow an older passage setting, "improve" when passage search is
+ * off but some notes are longer than one passage (only worth it with
+ * meaning search), else null. Returns { kind, notes, reason }.
+ */
+export function passageOffer(stats) {
+  const rebuild = stats?.vectors_need_rebuild;
+  if (!rebuild || typeof rebuild !== "object" || stats?.offline) return null;
+  const pending = Number(rebuild.documents) || 0;
+  if (rebuild.needed && pending > 0) {
+    return { kind: "rebuild", notes: pending, reason: typeof rebuild.reason === "string" ? rebuild.reason : "" };
+  }
+  const longNotes = Number(rebuild.long_notes ?? stats?.long_notes) || 0;
+  if (rebuild.recommended && longNotes > 0 && Number(stats?.vectors) > 0) {
+    return { kind: "improve", notes: longNotes, reason: typeof rebuild.reason === "string" ? rebuild.reason : "" };
+  }
+  return null;
+}
+
+/** The Health row about long notes: whether they are split into passages. */
+export function longNotesText(stats) {
+  const longNotes = Number(stats?.long_notes) || 0;
+  const on = Boolean(stats?.chunking) && typeof stats.chunking === "object";
+  if (on) {
+    const words = Number(stats.chunking.max_words) || 200;
+    return longNotes
+      ? `${plural(longNotes, "note")} longer than ${words} words ${longNotes === 1 ? "is" : "are"} searched passage by passage`
+      : `Split into passages when longer than ${words} words`;
+  }
+  return longNotes
+    ? `Meaning search reads only the beginning of ${plural(longNotes, "long note")}`
+    : "Each note has one vector";
+}
+
+function startRebuild(chunking, trigger) {
+  actions.rebuildVectors?.({ chunking, trigger });
+}
+
+/** The callout that offers to rebuild vectors (needed) or split long notes (recommended). */
+function passageCallout(stats) {
+  const offer = passageOffer(stats);
+  if (!offer) return null;
+  const keywordOnly = !(Number(stats?.vectors) > 0);
+  if (offer.kind === "rebuild") {
+    const label = keywordOnly ? "Update passages" : "Rebuild vectors";
+    return el("div", { class: "notice notice-attention passage-callout", id: "passage-callout", dataset: { kind: "rebuild" } },
+      icon("alert", "icon notice-icon"),
+      el("div", { class: "notice-body" },
+        el("p", { class: "notice-title", text: keywordOnly ? "Search passages need an update" : "Vectors need a rebuild" }),
+        el("p", { class: "section-copy", text: offer.reason || `${plural(offer.notes, "note")} still use${offer.notes === 1 ? "s" : ""} an older passage setting.` }),
+        el("div", { class: "notice-actions" },
+          keyed(button(label, {
+            variant: "primary",
+            iconName: "sparkle",
+            onClick: (event) => startRebuild("keep", event.currentTarget),
+          }), "rebuild-vectors-health")),
+      ));
+  }
+  return el("div", { class: "notice notice-info passage-callout", id: "passage-callout", dataset: { kind: "improve" } },
+    icon("sparkle", "icon notice-icon"),
+    el("div", { class: "notice-body" },
+      el("p", { class: "notice-title", text: `Improve meaning search for long notes — ${plural(offer.notes, "note")} ${offer.notes === 1 ? "is" : "are"} longer than one passage` }),
+      el("p", { class: "section-copy", text: "Meaning search reads about 200 words of each note. Splitting long notes into passages lets it find answers further down. Search keeps working while vectors are rebuilt." }),
+      el("div", { class: "notice-actions" },
+        keyed(button("Split long notes", {
+          variant: "primary",
+          iconName: "sparkle",
+          title: "Turn on passage search and rebuild the vectors of long notes",
+          onClick: (event) => startRebuild("default", event.currentTarget),
+        }), "split-long-notes")),
+    ));
+}
+
 /** A registered folder that no longer exists: locate its new place, or remove it. */
 function missingRootRow(root) {
   const label = baseName(root.root) || root.root;
@@ -192,26 +267,102 @@ function renderHealth() {
   const documents = Number(stats.documents) || 0;
   const vectors = Number(stats.vectors) || 0;
   const missing = Number(stats.vectors_missing) || 0;
+  // With passages a long note has several vectors: say how many notes they cover.
+  const vectorNotes = Number(stats.health?.vectors);
+  const perNote = Number.isFinite(vectorNotes) && vectorNotes > 0 && vectors > vectorNotes
+    ? `${formatInteger(vectors)} for ${plural(vectorNotes, "note")}` : formatInteger(vectors);
   const vectorText = vectors
-    ? missing ? `${formatInteger(vectors)} (${formatInteger(missing)} documents missing vectors)` : `${formatInteger(vectors)}, meaning search is on`
+    ? missing ? `${perNote} (${formatInteger(missing)} documents missing vectors)` : `${perNote}, meaning search is on`
     : "None. Keyword search only.";
   const ok = stats.health?.ok !== false;
   const lastIndexed = stats.last_indexed_at
     ? `${formatDateTime(stats.last_indexed_at)} (${relativeTime(stats.last_indexed_at)})`
     : "Not recorded";
-  byId("manage-health-content").replaceChildren(
+  // replaceChildren would print a null as text: leave absent parts out.
+  byId("manage-health-content").replaceChildren(...[
     el("p", { class: "health-sentence", dataset: { tone: ok ? "ok" : "warn" } },
       icon(ok ? "check-circle" : "alert", "icon inline-icon"),
       stats.status_detail || (ok ? "This collection is healthy." : "This collection needs attention.")),
+    passageCallout(stats),
     el("dl", { class: "info-list" },
       row("Documents", formatInteger(documents)),
       row("Vectors", vectorText),
+      vectors > 0 && documents > 0 ? row("Long notes", longNotesText(stats)) : null,
       row("Consistency", ok ? "Index and documents agree" : "Something is out of sync. Run an integrity check."),
       row("Last indexed", lastIndexed),
       row("Size", formatBytes(stats.db_bytes), stats.size_note ? el("span", { class: "info-note", text: stats.size_note }) : null),
     ),
     changesBlock(),
-  );
+  ].filter(Boolean));
+}
+
+/* ---------- auto-sync ---------- */
+
+function changedNotes(changes) {
+  if (!changes || typeof changes !== "object") return 0;
+  return ["added", "updated", "removed"].reduce((sum, key) => sum + (Number(changes[key]) || 0), 0);
+}
+
+/** One plain sentence for the Manage auto-sync line. */
+export function autoSyncLine(sync, now = Date.now()) {
+  if (!sync || typeof sync !== "object") return "";
+  const last = sync.last_sync_at ? relativeTime(sync.last_sync_at, now) : "";
+  if (!sync.enabled) {
+    return last ? `Off. Last synced ${last}.` : "Off. Use “Update index” to pick up changes in your folders.";
+  }
+  const pending = sync.pending || {};
+  const count = ["new", "changed", "deleted"].reduce((sum, key) => sum + (Number(pending[key]) || 0), 0);
+  const message = typeof sync.message === "string" ? sync.message : "";
+  if (sync.state === "syncing") return `Syncing ${plural(count || 1, "change")} now…`;
+  if (sync.state === "scanning" && count) return `${plural(count, "change")} found. Syncing once the files are saved…`;
+  if (sync.state === "paused") return message || "Paused for a moment.";
+  if (sync.state === "error") return message || "Auto-sync hit a problem and will try again.";
+  const changed = changedNotes(sync.last_changes);
+  const lastText = last
+    ? `On · last synced ${last}${changed ? ` (${plural(changed, "note")} changed)` : ""}.`
+    : "On · watching your folders for changes.";
+  return message ? `${lastText} ${message}` : lastText;
+}
+
+function renderAutoSync() {
+  const block = byId("manage-autosync");
+  const toggle = byId("autosync-toggle");
+  const stats = state.stats || {};
+  const sync = stats.auto_sync;
+  // An older server does not report auto-sync: hide the switch.
+  block.hidden = !sync || typeof sync !== "object";
+  if (block.hidden) return;
+  if (!autoSyncBusy) toggle.checked = Boolean(sync.enabled);
+  const available = sync.available !== false && Boolean(stats.collection) && !stats.offline;
+  // Not disabled while a change is saved: that would drop keyboard focus.
+  toggle.disabled = !available;
+  const line = byId("autosync-status");
+  line.dataset.tone = sync.enabled ? (sync.state === "error" ? "warn" : "ok") : "muted";
+  line.textContent = available ? autoSyncLine(sync) : "Index a folder first, then OneFind can keep it up to date.";
+}
+
+async function toggleAutoSync(event) {
+  const toggle = event.currentTarget;
+  const enabled = toggle.checked;
+  if (autoSyncBusy) {
+    toggle.checked = !enabled; // one change at a time
+    return;
+  }
+  autoSyncBusy = true;
+  toggle.setAttribute("aria-busy", "true");
+  try {
+    const status = await api.setAutoSync(enabled);
+    if (state.stats && status && typeof status === "object") state.stats.auto_sync = status;
+    announce(enabled ? "Auto-sync on. OneFind keeps this collection up to date." : "Auto-sync off.");
+  } catch (error) {
+    toggle.checked = !enabled;
+    toastError(error, "Auto-sync could not be changed.");
+  } finally {
+    autoSyncBusy = false;
+    toggle.removeAttribute("aria-busy");
+    renderAutoSync();
+  }
+  await actions.refreshStats?.();
 }
 
 /* ---------- maintenance ---------- */
@@ -300,6 +451,7 @@ function renderMaintenance() {
   const vectors = Number(stats.vectors) || 0;
   const missing = Number(stats.vectors_missing) || 0;
   const needVectors = vectors === 0 || missing > 0;
+  const rebuild = passageOffer(stats)?.kind === "rebuild";
   const trigger = (run) => (event) => run(event.currentTarget);
   byId("manage-maintenance-content").replaceChildren(
     block(
@@ -317,8 +469,16 @@ function renderMaintenance() {
             title: "Build vectors so you can search by meaning",
           }), "reindex-vectors")
           : null,
+        rebuild
+          ? keyed(button("Rebuild vectors", {
+            variant: "secondary",
+            iconName: "sparkle",
+            onClick: trigger((node) => startRebuild("keep", node)),
+            title: "Split notes into passages again under the current setting and rebuild their vectors",
+          }), "rebuild-vectors")
+          : null,
       ),
-      needVectors ? null : el("p", { class: "status-line", dataset: { tone: "ok" } },
+      needVectors || rebuild ? null : el("p", { class: "status-line", dataset: { tone: "ok" } },
         icon("check-circle", "icon inline-icon"), "Vectors complete: every document can be found by meaning."),
     ),
     block(
@@ -616,6 +776,7 @@ function renderAll() {
   byId("manage-collection").replaceChildren("Collection", ...(name ? [" · ", el("span", { class: "eyebrow-name", text: name })] : []));
   keepingFocus("manage-body", () => {
     renderHealth();
+    renderAutoSync();
     renderMaintenance();
     renderBackups();
     renderCollectionInfo();
@@ -709,6 +870,7 @@ export function initManage() {
     setReducedMotion(event.target.checked);
     announce(event.target.checked ? "Motion reduced." : "Motion restored.");
   });
+  byId("autosync-toggle").addEventListener("change", toggleAutoSync);
   byId("pref-single-keys").addEventListener("change", (event) => {
     setSingleKeysEnabled(event.target.checked);
     announce(event.target.checked ? "Single-key shortcuts on." : "Single-key shortcuts off.");
@@ -717,11 +879,15 @@ export function initManage() {
   byId("manage-button").addEventListener("click", (event) => openManage({ trigger: event.currentTarget }));
   on("theme", renderPrefs);
   on("stats", (stats) => {
+    // The switch is updated in place (never rebuilt), so this is cheap and keeps focus.
+    renderAutoSync();
     // Background polls arrive every few seconds: re-render only when the
     // collection actually changed, so focus and results stay put.
+    const rebuild = stats?.vectors_need_rebuild || {};
     const signature = JSON.stringify([
       stats?.collection?.name, stats?.status, stats?.status_detail, stats?.documents, stats?.vectors,
       stats?.vectors_missing, stats?.db_bytes, stats?.last_indexed_at, stats?.health?.ok,
+      stats?.long_notes, stats?.chunking, rebuild.needed, rebuild.documents, rebuild.recommended,
     ]);
     if (signature === statsSignature) return;
     statsSignature = signature;

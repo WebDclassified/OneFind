@@ -124,11 +124,16 @@ export const api = {
   job: (id, signal) => get(`/api/jobs/${enc(id)}`, { signal }),
   cancelJob: (id) => post(`/api/jobs/${enc(id)}/cancel`),
   changes: (signal) => get("/api/index/changes", { signal }),
+  /** Auto-sync of the active collection: status, and turning it on or off (saved in the collection). */
+  autoSync: (signal) => get("/api/autosync", { signal }),
+  setAutoSync: (enabled) => post("/api/autosync", { enabled: Boolean(enabled) }),
   /** Forget a folder of the collection; its notes leave the index unless deleteDocuments is false. */
   removeRoot: (rootId, { deleteDocuments = true } = {}) =>
     post("/api/roots/remove", { root_id: rootId, delete_documents: Boolean(deleteDocuments) }),
   /** Point a moved folder at its new place; every note keeps its id. */
   relocateRoot: (rootId, path) => post("/api/roots/relocate", { root_id: rootId, path }),
+  /** The collection's folders with their saved exclude patterns (no disk access). */
+  roots: (signal) => get("/api/roots", { signal }),
 
   document: (docId, signal) => get(`/api/documents/${encPath(docId)}`, { signal }),
   openDocument: (docId, reveal = false, confirmNetwork = false) =>
@@ -152,6 +157,8 @@ export const api = {
   check: () => post("/api/maintenance/check"),
   repair: () => post("/api/maintenance/repair"),
   compact: () => post("/api/maintenance/compact"),
+  /** Background job that re-splits long notes into passages and re-embeds them. chunking: keep | default | off. */
+  rebuildVectors: (chunking = "keep") => post("/api/maintenance/rebuild-vectors", { chunking }),
   clear: (confirmName) => post("/api/maintenance/clear", { confirm_name: confirmName }),
 };
 

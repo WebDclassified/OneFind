@@ -35,7 +35,12 @@ function vectorSummary(stats) {
   const vectors = Number(stats.vectors) || 0;
   if (!vectors) return ["None", "Keyword search only"];
   const missing = Number(stats.vectors_missing) || 0;
-  return [formatInteger(vectors), missing ? `${formatInteger(missing)} missing` : "Meaning search on"];
+  if (missing) return [formatInteger(vectors), `${formatInteger(missing)} missing`];
+  // With passages a long note has several vectors: say how many notes they cover.
+  const vectorNotes = Number(stats.health?.vectors);
+  const covers = Number.isFinite(vectorNotes) && vectorNotes > 0 && vectors > vectorNotes
+    ? `For ${plural(vectorNotes, "note")} · meaning search on` : "Meaning search on";
+  return [formatInteger(vectors), covers];
 }
 
 export function renderStatusCard() {

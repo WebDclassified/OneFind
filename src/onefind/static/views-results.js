@@ -40,6 +40,16 @@ function normalizeSegments(value) {
 
 const stringList = (value) => (Array.isArray(value) ? value.filter((item) => typeof item === "string") : []);
 
+/** A result's `passage` ({seq, count, text}) when the note was split into several, else null. */
+export function normalizePassage(value) {
+  if (!value || typeof value !== "object") return null;
+  const seq = Number(value.seq);
+  const count = Number(value.count);
+  if (!Number.isInteger(seq) || seq < 0 || !Number.isInteger(count) || count < 2 || seq >= count) return null;
+  if (typeof value.text !== "string" || !value.text.trim()) return null;
+  return { seq, count, text: value.text };
+}
+
 export function normalizeResult(raw, index = 0) {
   const data = raw && typeof raw === "object" ? raw : {};
   const score = data.score && typeof data.score === "object" ? data.score : { value: data.score, metric: "score" };
@@ -60,6 +70,8 @@ export function normalizeResult(raw, index = 0) {
     duplicates: stringList(data.duplicates),
     confidence,
     explain,
+    // The passage of a long note that a meaning match came from: {seq, count, text} or null.
+    passage: normalizePassage(data.passage),
     snippet: normalizeSegments(data.snippet),
     score: Number.isFinite(Number(score.value)) ? Number(score.value) : null,
     metric: typeof score.metric === "string" ? score.metric : "score",

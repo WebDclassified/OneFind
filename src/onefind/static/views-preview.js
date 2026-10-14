@@ -64,13 +64,76 @@ export function findSegments(text, { phrase = "", words = [] } = {}) {
   return segments;
 }
 
+/**
+ * The body's paragraphs (split on blank lines) with their character offsets
+ * in the CRLF-normalized body: [{text, start, end}].
+ */
+export function paragraphSpans(body) {
+  const text = String(body || "").replace(/\r\n?/g, "\n");
+  const spans = [];
+  const push = (from, to) => {
+    let start = from;
+    let end = to;
+    while (start < end && text[start] === "\n") start += 1;
+    while (end > start && text[end - 1] === "\n") end -= 1;
+    const part = text.slice(start, end);
+    if (part.trim()) spans.push({ text: part, start, end });
+  };
+  const breaks = /\n{2,}/g;
+  let last = 0;
+  for (const match of text.matchAll(breaks)) {
+    push(last, match.index);
+    last = match.index + match[0].length;
+  }
+  push(last, text.length);
+  return spans;
+}
+
 function paragraphs(body) {
-  return String(body || "").replace(/\r\n?/g, "\n").split(/\n{2,}/).map((part) => part.replace(/^\n+|\n+$/g, ""))
-    .filter((part) => part.trim());
+  return paragraphSpans(body).map((span) => span.text);
 }
 
 /** Whitespace-collapsed, lower-case text for loose comparisons. */
 const looseText = (text) => String(text || "").replace(/\s+/g, " ").trim().toLowerCase();
+
+/**
+ * Which paragraphs (first..last index) hold a result's passage. Passages are
+ * exact slices of the stored note, so an exact search usually finds it; the
+ * loose fallback compares the passage's first and last lines without
+ * whitespace differences. Null when it cannot be found (e.g. the preview
+ * shows only the beginning of a very long note).
+ */
+export function passageParagraphRange(body, passage) {
+  const needle = String(passage || "").replace(/\r\n?/g, "\n").replace(/^\n+|\n+$/g, "");
+  if (!needle.trim()) return null;
+  const text = String(body || "").replace(/\r\n?/g, "\n");
+  const spans = paragraphSpans(text);
+  if (!spans.length) return null;
+  const at = text.indexOf(needle);
+  if (at >= 0) {
+    const end = at + needle.length;
+    const first = spans.findIndex((span) => span.end > at);
+    let last = -1;
+    spans.forEach((span, index) => {
+      if (span.start < end) last = index;
+    });
+    return first >= 0 && last >= first ? { first, last } : null;
+  }
+  const lines = needle.split("\n").map(looseText).filter((line) => line.length >= 8);
+  if (!lines.length) return null;
+  const loose = spans.map((span) => looseText(span.text));
+  const first = loose.findIndex((paragraph) => paragraph.includes(lines[0].slice(0, 60)));
+  if (first < 0) return null;
+  const tail = lines[lines.length - 1].slice(-60);
+  let last = first;
+  for (let index = first; index < loose.length; index += 1) {
+    if (loose[index].includes(tail)) {
+      last = index;
+      break;
+    }
+  }
+  return { first, last };
+}
 
 /**
  * The paragraph that holds the result's snippet. `snippet` is the result's
@@ -122,8 +185,16 @@ function renderBody({ jumpToMatch = false } = {}) {
   const options = phrase ? { phrase } : { words: queryTerms };
   let count = 0;
   const texts = paragraphs(currentDoc?.body);
-  const blocks = texts.map((text) => {
-    const node = el("p", { class: "preview-paragraph" });
+  const result = currentDoc
+    ? (state.lastResponse?.results || []).find((item) => item.docId === currentDoc.doc_id) || null
+    : null;
+  // A meaning match in a long note: mark the passage it came from.
+  const range = result?.passage ? passageParagraphRange(currentDoc?.body, result.passage.text) : null;
+  const blocks = texts.map((text, index) => {
+    const inPassage = Boolean(range) && index >= range.first && index <= range.last;
+    const node = el("p", {
+      class: `preview-paragraph${inPassage ? " is-passage" : ""}${inPassage && index === range.last ? " is-passage-end" : ""}`,
+    });
     for (const segment of findSegments(text, options)) {
       if (segment.highlight && count < MAX_MARKS) {
         node.append(el("mark", { text: segment.text }));
@@ -135,14 +206,25 @@ function renderBody({ jumpToMatch = false } = {}) {
     return node;
   });
   if (!blocks.length) blocks.push(el("p", { class: "preview-empty", text: "This document has no text." }));
-  container.replaceChildren(...blocks);
+  const label = range
+    ? el("div", {
+      class: "passage-label",
+      id: "preview-passage-label",
+      text: `Closest passage · ${result.passage.seq + 1} of ${result.passage.count}`,
+    })
+    : null;
+  container.replaceChildren(...(label ? [...blocks.slice(0, range.first), label, ...blocks.slice(range.first)] : blocks));
   marks = [...container.querySelectorAll("mark")];
   markIndex = -1;
   container.scrollTop = 0;
   if (jumpToMatch && currentDoc) {
-    const result = (state.lastResponse?.results || []).find((item) => item.docId === currentDoc.doc_id);
-    const paragraph = result ? blocks[snippetParagraphIndex(texts, result.snippet)] : null;
-    const target = paragraph?.querySelector("mark") || marks[0] || paragraph || null;
+    const passageBlocks = range ? blocks.slice(range.first, range.last + 1) : [];
+    const paragraph = range ? null : result ? blocks[snippetParagraphIndex(texts, result.snippet)] : null;
+    // From a passage: its first highlighted word, else the passage itself
+    // (never a highlight elsewhere in the note).
+    const target = range
+      ? passageBlocks.map((node) => node.querySelector("mark")).find(Boolean) || label
+      : paragraph?.querySelector("mark") || marks[0] || paragraph || null;
     if (target) {
       if (target.tagName === "MARK") {
         markIndex = marks.indexOf(target);

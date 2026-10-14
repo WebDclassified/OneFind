@@ -8,7 +8,8 @@
 > section at the end of this file. **Where a Deviation and an earlier section
 > disagree, the Deviation describes the shipped behaviour.**
 >
-> Status: shipped in **1.2.0** (see [`CHANGELOG.md`](../CHANGELOG.md)).
+> Status: sections 0–8 shipped in **1.2.0**; sections 9–10 (passage chunking, auto-sync) and
+> their app wiring shipped in **1.2.1** (see [`CHANGELOG.md`](../CHANGELOG.md)).
 > End-user documentation: [`docs/12-user-guide.md`](12-user-guide.md).
 
 **Sections:** [0 Ground rules](#0-ground-rules) ·
@@ -20,6 +21,8 @@
 [6 HTTP API](#6-http-api-srconefindservepy) ·
 [7 CLI](#7-cli-srconefindclipy) ·
 [8 Frontend](#8-frontend-srconefindstatic) ·
+[9 Passage chunking](#9-passage-chunking-v121) ·
+[10 Auto-sync](#10-auto-sync-v121) ·
 [Deviations](#deviations)
 
 ## 0. Ground rules
@@ -385,6 +388,371 @@ Backup/restore paths accepted from the client must be inside
   `prefers-reduced-motion` and a user "Reduce motion" toggle
   (`data-motion="reduced"`).
 
+## 9. Passage chunking (v1.2.1)
+
+The embedding model (all-MiniLM-L6-v2) reads only the first 256 word pieces
+(about 200 words) of a text. Before v1.2.1 every note had **one** vector of
+`compose_embed_text(title, body)`, so meaning search could not see anything
+after a note's first ~200 words. With passage chunking a long note is split
+into overlapping passages, each passage gets its own vector, and a note is
+ranked by its best passage. Keyword search (FTS5/BM25) is unchanged: still one
+FTS row per note.
+
+### 9.1 The setting (`schema_meta`)
+
+| key | value |
+|---|---|
+| `chunking` | JSON `{"version": 1, "max_words": 200, "overlap_words": 40}` or `"off"`; **absent = off** (one whole-note passage per note, the pre-1.2.1 behaviour) |
+| `chunking_built` | the setting every stored note is known to follow; `"mixed"` when that is unknown. While it differs from `chunking` and some note is affected, a rebuild is pending |
+
+- **New collections default to on** (`onefind.chunking.DEFAULT_CHUNKING`):
+  `Index.open` writes both keys when it *creates* a database, so
+  `Library.create`, `onefind index` on a new file and jobs all get it.
+- **Existing collections keep what they have** (pre-1.2.1 files have no key,
+  i.e. off). Nothing is re-split behind the user's back; see 9.5.
+- **Evaluation stays whole-document:** `evaluate.run_eval` calls
+  `index.set_chunking(None)` on its fresh staging index (one vector per BEIR
+  document, published numbers stay reproducible) and records
+  `"chunking": null` in `eval_manifest`; `run_alpha_sweep` refuses an index
+  whose documents were split. `run_smoke` evaluates whatever the index uses.
+- `clear()` keeps `chunking` (it is an identity key now) and resets
+  `chunking_built` to it.
+
+Default calibrated on 2026-10-14 with the real model (hybrid uses
+`lexical_match="auto"` like the server; k = 10; answerable queries only):
+
+| corpus / mode | whole notes (off) hit@1 · hit@3 · MRR | 160/40 + break before headings | **200/40 (default)** |
+|---|---|---|---|
+| sample-data (20 short notes) hybrid | 1.000 · 1.000 · 1.000 | identical | 1.000 · 1.000 · 1.000 |
+| sample-data semantic | 1.000 · 1.000 · 1.000 | identical | 1.000 · 1.000 · 1.000 |
+| showcase-data (120 notes, ~250 words) hybrid | 0.948 · 0.990 · 0.968 | 0.943 · 0.969 · 0.960 | **0.964 · 0.990 · 0.977** |
+| showcase-data semantic | 0.922 · 0.974 · 0.952 | 0.932 · 0.958 · 0.948 | **0.943 · 0.979 · 0.963** |
+
+Off reproduces the pre-change numbers exactly. Confidence thresholds
+(`STRONG_SIM`/`WEAK_SIM`) are unchanged: with passages the weakest relevant
+best-passage cosine on showcase rose from 0.357 to 0.428 and the strongest
+off-topic top-1 from 0.241 to 0.282 (21 off-topic questions; sample-data
+0.330 either way), all below `WEAK_SIM = 0.34`, so every off-topic question
+still abstains in float, int8 and binary. Long-note proof
+(`tests/test_chunking.py`): a 740-word note whose answer is in its last
+lines ranks #1 by meaning (cosine 0.46, "moderate", passage 5 of 5) with
+chunking on, and #4 at 0.18 ("weak", query abstains) with it off.
+
+### 9.2 Splitting (`src/onefind/chunking.py`, no dependencies)
+
+`split_passages(body, config) -> list[str]`:
+- `config is None`, or the body has at most `max_words` words → `[body]`
+  (byte-identical to before; the empty body too).
+- Otherwise passages are **exact slices of the body**, in order, cut only
+  between words. Units are sentences of prose paragraphs and whole lines for
+  headings, list items, quotes, table rows and fenced code; a unit longer than
+  `max_words / 2` (run-on or unpunctuated text) is cut into word-aligned
+  pieces of `max_words / 8` words. Units are packed greedily up to
+  `max_words`; the next passage starts with trailing whole units of up to
+  `overlap_words` words (none when the next unit is a heading). A passage
+  never ends on a heading when text follows. At most `MAX_PASSAGES = 1000`
+  passages per note (~160k words; the rest is still found by keywords).
+- A "word" is a run of non-space characters, except that CJK ideographs,
+  kana and hangul count one word each (`count_words`). CRLF is handled; one
+  huge "word" is never cut.
+- Helpers: `normalize_chunking(value)` (None/False/`"off"` → None;
+  True/`"on"`/`"default"` → default; dict or JSON text validated, raises
+  `UsageError`), `chunking_to_meta`, `chunking_from_meta` (unreadable or
+  newer-version values read as off).
+
+### 9.3 Storage (`store.py`)
+
+- `chunks` holds `seq 0..n-1` per note with the passage text; `vec_float`
+  holds one vector per chunk `row_id` (as before). Each passage is embedded
+  as `compose_embed_text(title, passage)` (= `title + "\n" + passage`), so a
+  one-passage note gets exactly the text it always had.
+- `add_documents` splits with the setting read once per call and replaces
+  a note's passages **and** vectors in the same transaction as its document
+  row: kept seqs keep their `row_id` (seq 0 never moves), rows past the new
+  end are deleted with their vectors. Unchanged passages of multi-passage
+  notes reuse their stored vectors, so editing a long note re-embeds only the
+  passages that changed. Encoding still runs with no transaction open.
+- `remove_documents`, `forget_root`, `clear` remove every passage and vector.
+- `repair()` re-splits (under the current setting) every note whose passages
+  are missing or match neither the current nor the built setting, drops their
+  vectors and re-embeds when a model is attached; `chunks_fixed` = orphan
+  passages + re-split notes; `vectors_missing` counts notes.
+- `integrity_check()`: "N documents have out-of-date search data" counts
+  notes with missing passages or passages matching no accepted setting (a
+  pending rebuild is **not** damage); new problem "N search passages belong
+  to documents that were removed".
+
+### 9.4 `Index` API (new)
+
+```python
+chunking_config() -> dict | None
+set_chunking(config) -> dict | None      # None/"off" | "default"/True | {"max_words", "overlap_words"}
+    # stored notes keep their passages; vectors_need_rebuild() reports the work.
+    # If no stored note is affected (empty or only short notes) it is marked built at once.
+vectors_need_rebuild() -> {"needed": bool, "documents": int, "reason": str,
+                           "chunking": dict | None, "long_notes": int, "recommended": bool}
+    # documents = notes rebuild_vectors() will re-split; recommended = passage search is
+    # off but notes longer than DEFAULT max_words exist (never for eval indexes);
+    # reason = one plain sentence ("" when nothing to say). Cached per data_version.
+rebuild_vectors(*, progress=None, cancel=None) -> {"documents", "rebuilt", "passages",
+        "vectors_embedded", "skipped", "chunking", "complete": True}
+    # re-splits only notes that differ, 16 notes per committed batch: a note is
+    # always fully old or fully new; cancel() -> OperationCancelled between
+    # batches; a rerun continues. Needs the model attached when the collection
+    # has vectors (UsageError), works without one for keyword-only collections.
+    # progress events {"phase": "scan"|"embed"|"write"|"done", "done", "total", "message"}
+    # (counts are notes). Marks chunking_built when nothing is left.
+passage_info(doc_ids) -> {doc_id: number_of_passages}
+vectors_for_docs(doc_ids)  # one-passage note -> [dim] (unchanged); multi-passage note ->
+                           # [n_passages, dim] matrix, row i = seq i; notes with a gap are left out
+```
+
+### 9.5 `health()` / `stats()` (existing keys kept)
+
+`health()` keys that callers read as **notes** stay note-level, so serve's and
+the CLI's `documents == chunks == fts` check keeps working with long notes:
+`chunks` = notes that have passages, `vectors` = notes with at least one
+vector, `missing_vectors` = notes with a passage lacking a vector,
+`orphan_vectors` = vector rows without a passage (rows). `ok` = every note
+has ≥ 1 passage, no passage without a note, one FTS row per note, and with
+vectors every passage has one and no vector is orphaned. New keys:
+`passages` (rows), `documents_without_passages`, `orphan_passages`,
+`chunking`, and with vectors `passage_vectors` (rows) and
+`missing_passage_vectors` (rows). `long_documents` now counts notes with a
+*passage* longer than the model window (~4 chars/token), i.e. normally 0 with
+chunking on.
+
+`stats()`: `chunks` and `vectors` stay **row** counts (`count("chunks")`,
+`count("vectors")`); new keys `passages` (= `chunks`), `chunking`,
+`long_notes` (notes longer than one passage; with chunking off, notes over
+the default 200 words, approximated in SQL) and `vectors_need_rebuild` (the
+dict above). All are cheap: the census is cached per `PRAGMA data_version`
+and the connection's own change count.
+
+### 9.6 Retrieval (`search.py`, `snippets.py`)
+
+- **Semantic**: float KNN runs over passages and keeps each note's best
+  passage (max similarity). One-passage collections fetch exactly `k` rows
+  as before; otherwise `ceil(k * passages / notes) + k` rows, doubling until
+  `k` distinct notes are found or the index is exhausted; above sqlite-vec's
+  KNN limit (4096) it switches to the exact block scan. int8, binary and
+  filtered block scans aggregate the same way (rows visited best-first per
+  block until `k` distinct notes, ties included). Order stays score desc,
+  `doc_id` asc; within a note the lowest seq wins ties.
+- **Hybrid** fuses the note-level semantic ranking (unchanged RRF/linear).
+  **Rerank** scores each candidate by its best passage. **Confidence** labels
+  use the best passage's cosine (binary: the best passage's float cosine);
+  thresholds unchanged (9.1).
+- `Hit` gains `passage_seq`, `passage_count`, `passage` (text of the best
+  passage, only for multi-passage notes) — `compare=False` presentation
+  fields like `explain`; filled for semantic/hybrid hits found by meaning.
+  `semantic_search(..., _with_passages=True)` is a private switch.
+- **Explain** adds `best_passage_seq` (0 = beginning; None for keyword-only
+  hits) and `passages` (count, None in lexical mode), plus the reason
+  "Closest passage is further down the note (passage i of n)" when
+  `best_passage_seq > 0`.
+- **Snippets**: `build_snippet(hit, body, query, *, max_chars=320,
+  passage=None)`; `passage` defaults to `hit.passage`. Order: highlighted
+  window of the matched passage → highlighted window of the body → FTS
+  `snippet()` with markers → unhighlighted matched passage (with `…` where the
+  note continues) → as before. serve.py needs no change to benefit.
+
+### 9.7 Jobs (`jobs.py`)
+
+```python
+JobManager.start_rebuild_vectors(db_path, *, model_name=None, chunking="keep", label=None) -> dict
+```
+Same job dict shape as `start_index` with `"kind": "rebuild_vectors"`,
+`"root": None`, `"options": {"chunking": "keep" | setting}`. `chunking` first
+changes the setting (`"default"`/True = on, None/`"off"` = off, or a dict;
+invalid → `UsageError` before the job starts). Steps: `scan` (finding notes
+that need new passages; `counts.found`), `index` (writing passages;
+`counts.read/saved`), `vectors` (embedding; `counts.embedded`; `skipped` for
+a keyword-only collection), `ready`. Phases `model`, `scan`, `write`/`embed`,
+`done`; counts are notes. The collection's model loads through the shared
+cache (`model_name` matters only without one). One job per collection,
+shared with indexing jobs (`UsageError("an indexing job is already
+running")`). Cancelled: `"Rebuilding vectors was cancelled. Notes finished so
+far keep their new passages; run it again to finish."`. Errors use the same
+codes as index jobs (`model_unavailable`, `model_mismatch`,
+`vectors_unavailable`, `collection_unreadable` for a missing file, …).
+`jobs.JOB_KINDS = ("index", "rebuild_vectors")`, `jobs.KEEP_CHUNKING = "keep"`.
+
+### 9.8 For the serve/UI integrator (wired in 1.2.1 — see the last Deviations entry)
+
+The checklist below was the hand-over note; every item is implemented as described in the
+2026-10-14 "chunking wired into the app" deviation (`vectors_need_rebuild` keeps its store name
+in `/api/stats`, and `long_notes` switched to `stats()["long_notes"]`).
+
+- `GET /api/stats`: pass `snapshot["vectors_need_rebuild"]` through (e.g. as
+  `vectors_rebuild`), plus `chunking`; show "Rebuild vectors" when
+  `needed`, and an "Improve meaning search for long notes" offer when
+  `recommended` (it sends `chunking: "default"`). Keep the existing
+  `long_notes` (= `health.long_documents`) or switch it to
+  `stats()["long_notes"]` deliberately — they now mean different things.
+- New endpoint, e.g. `POST /api/maintenance/rebuild-vectors {"chunking":
+  "keep"|"default"|"off"}` → 202 job dict from
+  `jobs.start_rebuild_vectors(db, chunking=...)` (CSRF header; `UsageError`
+  "already running" → 409 `collection_busy`; other `UsageError` → 400). Strip
+  `db` before embedding the job in `/api/stats`, as for index jobs; the UI
+  polls it like an index job (`kind` tells them apart).
+- Results: `explain.best_passage_seq` / `explain.passages` can label "match
+  found further down"; snippets already show the matched passage.
+
+## 10. Auto-sync (v1.2.1)
+
+Keeps a collection's index up to date while the user's note files change.
+**No new dependency** (no `watchdog`): efficient polling in
+`src/onefind/watcher.py`, with the actual work done by ordinary `JobManager`
+index jobs. `ingest.py` and `jobs.py` are used unchanged.
+
+### 10.1 Preference
+
+`schema_meta` key `auto_sync` = `"on"` | `"off"` (absent = off), read/written
+with `watcher.get_preference(index)` / `watcher.set_preference(index, bool)`
+(`Index.get_meta`/`set_meta`). It lives in the collection file, so it travels
+with a backup or a copied `.db`. Existing collections default to **off**;
+the UI wizard sends `auto_sync: true` by default for new (or still empty)
+collections. `Index.clear()` drops it (with every folder), like all
+non-identity meta keys.
+
+### 10.2 `watcher.AutoSync`
+
+```python
+AutoSync(job_manager, *, interval=None, max_interval=120.0, cooldown=10.0,
+         allow_network=False, on_event=None, stop_timeout=10.0)
+start(db_path, roots=None, *, interval=None, allow_network=None) -> status
+    # roots: [{"root_id", "path", "exclude", "allow_network"?}] fixed list;
+    # None = re-read Index.roots() on every poll (folders added later are picked up)
+    # idempotent: at most one watcher thread per db path ("onefind-autosync-N", daemon)
+stop(db_path, timeout=None) -> status      # cancels an in-flight auto-sync job, joins
+shutdown(timeout=None)                     # stop all; start() then raises UsageError
+status(db_path) -> dict
+running(db_path) -> bool ; watched() -> [db path] ; poke(db_path) ; blank_status()
+preempt(db_path, *, timeout=15.0, cooldown=None) -> bool
+    # make way for a manual action: no new auto-sync job for `cooldown` s
+    # (>= 2 poll intervals), cancel + wait for a running one
+```
+
+Status (never contains the database path):
+`{"enabled": bool, "state": "idle"|"scanning"|"syncing"|"paused"|"error",
+"last_scan_at": iso|null, "last_sync_at": iso|null,
+"pending": {"new", "changed", "deleted"}, "message": str, "interval_s": float,
+"syncs": int, "last_changes": {"added","updated","removed"}|null,
+"progress": int|null, "skipped_roots": int}`. `syncs` counts finished runs
+that changed something (the UI refreshes quietly when it grows); `progress`
+is the running job's percent; `skipped_roots` counts network folders left
+alone. `on_event(event)` gets `{"type": "started"|"changes"|"sync_started"|
+"synced"|"paused"|"error"|"stopped", "db", ...}` (`changes`/`sync_started`
+carry `root,new,changed,deleted`; `synced` carries
+`root,added,updated,removed,seconds`); `paused`/`error` fire on transitions only.
+
+### 10.3 One poll
+
+1. Collection file gone: state `idle` with a message, and the thread ends (self-stop).
+2. In a `preempt` cooldown, or while **any** job is active for the db
+   (`JobManager.active_for`): `paused` ("Waiting for indexing to finish.").
+   Afterwards every folder is compared against the index again.
+3. Open the db read-only (`Index.open(readonly=True)`, falling back to a
+   normal open for old schemas), read roots and `has_vectors()`, close.
+4. Per folder: skip network folders (UNC `\\host\share`, `\\?\`, and on
+   Windows mapped drives via `GetDriveTypeW == DRIVE_REMOTE`, no I/O) unless
+   `allow_network`; take a **stat-only snapshot** (`snapshot_root`: `os.scandir`
+   walk, relative posix path to `(mtime_ns, size)`, `SUPPORTED_SUFFIXES`
+   only, `DEFAULT_EXCLUDES` plus the folder's saved patterns via
+   `ingest.is_excluded`, excluded dirs never entered; `files_only` roots stat
+   only their indexed files). A missing or unlistable folder is kept as is,
+   with a plain message. A folder that suddenly has **no** notes while the
+   index holds 5 or more of them is left alone too (sync client, unplugged
+   disk); the message says to update from Manage if that was intended.
+5. **Debounce:** a folder is synced only when its snapshot equals the
+   previous poll's (stable for 2 consecutive polls) and differs from the
+   snapshot last synced. Until then the state is `scanning` with stat-level
+   `pending` counts.
+6. `scan_changes(index, root, exclude)` confirms (hash compare, so a touched
+   but unchanged file runs no job). Any new/changed/deleted file starts
+   `JobManager.start_index(db, root, exclude=..., embed=index.has_vectors(),
+   prune=True, incremental=True, label="Auto-sync", refresh_files=files_only)`.
+   That is the manual-reindex embed policy: a keyword-only collection never
+   loads the model. The watcher waits for the job (state `syncing`), then
+   records the snapshot as synced. A cancelled job (preempt/stop) means `paused`.
+7. **Interval:** `interval_s = clamp(max(base, 40 x walk seconds), base,
+   max(base, max_interval))`, about 2.5% of one core at most, so large trees
+   are polled less often (the message says so). Base = the `interval`
+   argument, else `$ONEFIND_AUTOSYNC_INTERVAL` (seconds, >= 0.02), else 5 s.
+8. **Errors** (unreadable db, failed scan, failed job, anything unexpected)
+   give state `error` with a plain message and a retry after
+   `min(300, interval x 2^failures)`. The thread never dies from an error.
+
+### 10.4 HTTP API (`serve.py`)
+
+`create_app(..., autosync=True, autosync_interval=None)`; `app.state.autosync`.
+There is one `AutoSync` per app, created with the runtime and shut down in the
+lifespan **before** `JobManager.shutdown`. It follows the active collection:
+startup, every switch (`switch_to`, open, restore-as-new, remove then next
+active) and a lazily opened index start the watcher when the collection's
+preference is on, and stop every other one. Restore-replace, delete-file /
+remove and the legacy reset stop the watcher before touching the file; clear
+re-evaluates (the preference is gone).
+
+| Method & path | Body | Response |
+|---|---|---|
+| GET `/api/autosync` | – | status (10.2) with `enabled` = the saved preference, plus `available` (a collection is open). Preference on but no watcher: `state: "paused"` with a message (with `--no-auto-sync`: "Auto-sync is turned off for this server"). |
+| POST `/api/autosync` (CSRF header) | `{"enabled": bool}` | saves the preference in the active collection, starts/stops watching, returns the status; 503 `no_index` without a collection |
+| GET `/api/stats` | – | adds `"auto_sync"`: the same status. An auto-sync job is **not** reported as `job` and does not make `status` `"indexing"` (background upkeep keeps the collection `"ready"`). |
+| POST `/api/index` | adds `"auto_sync": bool \| null` | a bool saves the preference after the job started (the watcher waits for that job); null leaves it alone |
+
+Every endpoint that calls `ensure_not_busy` (index, roots remove/relocate,
+collection remove, maintenance check/repair/compact/clear/restore, reset)
+first calls `AutoSync.preempt`, so **a manual action always wins**: the
+auto-sync job is cancelled (finished batches stay) and no new one starts
+during the cooldown. Status messages never contain the database path (it is
+replaced by "the collection file").
+
+### 10.5 CLI
+
+- `onefind watch [--db FILE | --collection NAME] [--interval S] [--duration S]
+  [--allow-network]` runs auto-sync in the foreground (whatever the saved
+  preference), printing one timestamped line per change, sync, pause or error
+  until Ctrl+C (exit 0) or `--duration`. It exits 4 when the collection has no
+  folders or its file disappears. `watch --set on|off` only saves the preference.
+- `onefind serve` honors each collection's saved preference;
+  `serve --no-auto-sync` never watches.
+- `onefind status` prints `auto-sync: on|off` (`--json`: `"auto_sync"`).
+
+### 10.6 Frontend
+
+- Header pill: `#status-label` keeps its text ("Ready"); a quiet
+  `#status-sync` suffix shows "· Auto-sync on" / "· Auto-sync paused" /
+  "· Auto-sync problem" (warn tone) and is hidden below 640 px. While a sync
+  runs, or settled changes are pending, the pill reads "Syncing N changes…"
+  with the busy pulse. It is never announced to screen readers and never
+  opens the job dialog.
+- Manage → Health: the `#autosync-toggle` switch with the plain explanation
+  and an `#autosync-status` line (last synced time, notes changed, pause or
+  error text).
+- Index wizard: `#index-autosync` "Keep this collection up to date
+  automatically", on for a new or empty collection and otherwise the
+  collection's current setting; sent as `auto_sync` (`wizardIndexBody({autoSync})`).
+- Polling: `/api/stats` every 5 s while auto-sync is on and every 1.5 s while
+  it is scanning/syncing (15 s otherwise). When `auto_sync.syncs` grows for
+  the same collection, the UI refreshes facets, the home lists and an open
+  Manage panel. It re-runs visible results and shows a 2.5 s "Index updated ·
+  N notes changed" info toast **only** when the person has not typed or
+  clicked for 8 s and no dialog is open.
+
+### 10.7 Integration notes
+
+- Behaviour change: with auto-sync on, a note removed with "Remove from
+  index" comes back the next time something in its folder changes (the same
+  as "Update index"). Exclude patterns keep it out.
+- `jobs.py` needs no hook: the watcher uses `start_index`, `active_for`,
+  `wait`, `get`, `cancel` and the job `label`. Changing those signatures, or
+  the meaning of `label`, breaks auto-sync.
+- `tools/ui_check.py` sets `ONEFIND_AUTOSYNC_INTERVAL=0.5`, unticks the
+  wizard box for "My Notes" (the walkthrough edits that folder on purpose to
+  check stale detection) and has its own auto-sync step.
+
 ## Deviations
 
 _(Implementers: append a dated line per deviation.)_
@@ -406,3 +774,6 @@ _(Implementers: append a dated line per deviation.)_
 - 2026-10-14 (review-fix pass, security): the API guard returns 403 `csrf_check_failed` for any `/api/` request with `Sec-Fetch-Site: cross-site|same-site`, and `GET /api/fs/list` now also requires `X-OneFind-Request: 1` (`api.js` sends it on every request). The folder picker refuses UNC and device paths before touching the file system (400 `invalid_path`). Reset tokens are compared as bytes and `create_app`/`serve --reset-token` reject tokens outside 16-256 characters (`UsageError`). `serve` never defaults to `allowed_hosts=["*"]`: loopback names, the bind address (IPv6 also bracketed, so `--host ::1` works) and repeatable `--allowed-host NAME` are accepted; `0.0.0.0`/`::` without `--allowed-host` exits 2; any non-loopback bind disables opening files. Database files are validated/copied with a `mode=rw` read connection (fallback `mode=ro`) so no `-wal`/`-shm` files are left behind (CLI and serve).
 - 2026-10-14 (review-fix pass: search.py + snippets.py): (a) hybrid RRF exact ties are broken by semantic rank, then `doc_id` (`rrf_fuse(prefer=)`; without `prefer` the old tie-break is unchanged). (b) For `lexical_match="auto"`, the strict pass and `strict_count`/`relaxed` mean "contains every keyword, stopwords excluded" (`all_keywords_fts_query`); `"all"` is unchanged; the UI copy says "No note contains all of your keywords…". (c) Binary-precision confidence labels use the float cosine of the returned hits' stored vectors (explain adds `float_similarity`); `BINARY_STRONG_SIM`/`BINARY_WEAK_SIM` are only the fallback when a float vector is missing; ranking is unchanged. Vector block scans (`search._vector_blocks` and `Index.iter_vector_blocks`) hold one read transaction so concurrent commits no longer fail a search; if the safety-net version check still trips, `/api/search` returns a retryable 409 `index_changed`. Snippets skip a title-only FTS fallback when a body passage exists and strip Markdown syntax (table pipes -> "Field: Value", list/quote/task markers, links, bold, backticks).
 - 2026-10-14 (review-fix pass: cli.py): `search --match all|any|auto` (default `auto` for lexical/hybrid, `all` for semantic, same as the app; a partial-match note goes to stderr). `smoke --match` is passed through only when `evaluate.run_smoke` accepts `lexical_match` (it does not yet, so `smoke` keeps `"all"`). A missing/unloadable model is exit 3 with a message (hybrid search falls back to keyword with a note; an `index --embed` run that just created an empty collection removes it). Every fix command printed by `status`/`doctor` includes `--collection NAME` or `--db <absolute path>`. `remove` prints the exact re-index command with the folder's saved `--exclude` patterns. `backup --out PATH` treats PATH as a folder when it exists, ends with a slash, or is a new path without an extension (created on demand).
+- 2026-10-14 (auto-sync, additive; new `watcher.py`, serve.py, cli.py, frontend): section 10 describes the shipped behaviour. Beyond section 6: `GET/POST /api/autosync`, `/api/stats` gains `auto_sync` and hides auto-sync jobs from `job`/`status`, `POST /api/index` accepts `auto_sync`, `create_app` gains `autosync`/`autosync_interval`, and `ensure_not_busy` preempts auto-sync. CLI: new `watch`, `serve --no-auto-sync`, and an `auto-sync` line in `status`. `ingest.py`/`jobs.py` are unchanged.
+- 2026-10-14 (passage chunking, additive; new `chunking.py`, store.py, search.py, snippets.py, jobs.py, evaluate.py): section 9 describes the shipped behaviour. Deviations from earlier sections: `health()["chunks"]`, `["vectors"]` and `["missing_vectors"]` now count **notes** (they equalled row counts while every note had one chunk), so `documents == chunks == fts` stays the consistency check; row counts moved to new keys (`passages`, `passage_vectors`, `missing_passage_vectors`). `health()["long_documents"]` counts notes with a passage longer than the model window (it used the whole body). `repair()["vectors_missing"]` counts notes. `vectors_for_docs()` returns a `[n_passages, dim]` matrix for multi-passage notes. `Index.open` writes `schema_meta.chunking`/`chunking_built` when it creates a database; `clear()` keeps `chunking`. `_metadata_for_rows` (private) returns `(doc_id, title, source, seq)`. `Hit` gains `passage_seq`/`passage_count`/`passage` (not compared). The "real chunking is still open" note in the 2026-10-14 review-fix entry is resolved. health()'s missing-vector count uses `row_id NOT IN (SELECT rowid FROM vec_float)` instead of a LEFT JOIN on vec0 (~15x faster `stats()` on 5,000 notes). serve.py/static are not changed by this work (see 9.8).
+- 2026-10-14 (chunking wired into the app + approved leftovers; serve.py, cli.py, evaluate.py, frontend; additive unless noted): **`/api/stats`** adds `chunking`, `passages` and `vectors_need_rebuild` (the `Index.vectors_need_rebuild()` dict, null without a collection). **Changed:** `long_notes` now means notes longer than one passage (`stats()["long_notes"]`); the previous meaning (`health.long_documents`, text past the model window) moved to `notes_over_model_window`. Nothing read the old key. With vectors and `needed`, `status_detail` says "Vectors need a rebuild for N notes"; a running rebuild job makes `status` `"indexing"` with "Rebuilding vectors… N%". **`POST /api/maintenance/rebuild-vectors {"chunking": "keep"|"default"|"off"}`** (CSRF) → 202 job without `db` (`kind: "rebuild_vectors"`, label = collection name); calls `ensure_not_busy` first (pre-empts auto-sync), 409 `collection_busy` while any job runs, 503 `no_index` without an open collection, 422 `validation_error` for another value. **Search results** add `passage`: `{"seq", "count", "text"}` for meaning matches in multi-passage notes, else null. **`GET /api/roots`** → `{"roots": [{root_id, path, exclude, documents, added_at, last_indexed_at, files_only, network}]}` (no disk access). **`POST /api/index`** accepts `collection`; when it is set and differs (case-insensitively) from the open collection → 409 `collection_changed` and no job starts. **`GET /api/fs/list`** marks `.jsonl` entries `supported: true`; `supported_files` still counts `SUPPORTED_SUFFIXES` only. **Frontend:** Manage → Health shows `#passage-callout` (`data-kind="improve"`: "Improve meaning search for long notes — N notes are longer than one passage", button *Split long notes* → `chunking: "default"`, only when the collection has vectors; `data-kind="rebuild"`: *Rebuild vectors*, also in Maintenance) and a *Long notes* row; rebuild jobs reuse the index dialog with their own step labels (Find long notes / Split long notes / Build vectors / Ready), *Cancel rebuild*, and done/failed copy; the header pill reads "Rebuilding N%". The preview marks the passage of a result with `passage` (`.preview-paragraph.is-passage` + `#preview-passage-label` "Closest passage · i of n") and jumps to its first highlight or label, never to a highlight elsewhere. The wizard loads `GET /api/roots` and pre-fills an indexed folder's saved patterns without counting them as an edit (`#index-options-summary` "Options · N saved exclusions"); `wizardIndexBody({collection})` and queued folder updates send `collection`. `isPickableFile` relies on the server's `supported` flag. **CLI:** `rebuild-vectors [--db|--collection] [--chunking keep|default|off] [-q]` (loads the collection's model before changing the setting; Ctrl+C as `index`, exit 130); `folders list [--json] | remove FOLDER [--keep-documents|--delete-documents] | relocate OLD NEW` (FOLDER/OLD = path or `[id]`; unknown folder or missing NEW → exit 4); `status` prints `passages` (+ JSON `chunking`, `long_notes`, `vectors_need_rebuild`) and `status`/`doctor` print a rebuild needed/recommended hint (not counted as damage). **`evaluate.run_smoke(..., *, lexical_match="auto")`** ("all" for semantic cases; result adds `lexical_match`) and **changed:** a no-answer case passes when no hits or only weak ones come back (`SearchOutcome.abstained`), because "auto" tops a lone common word up with weak partial hits; `onefind smoke --match` defaults to `auto`. Re-baseline: sample-data 1.000/1.000/1.000, showcase-data Hit@3 0.984, MRR@5 0.967, no-answer 1.000 (same with `all`).

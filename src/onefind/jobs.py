@@ -25,6 +25,7 @@ from collections.abc import Callable
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
+from .chunking import normalize_chunking
 from .envcheck import DEFAULT_MODEL
 from .errors import (
     CorpusNotFoundError,
@@ -43,13 +44,18 @@ __all__ = [
     "ACTIVE_STATUSES",
     "EmbedderCache",
     "JobManager",
+    "JOB_KINDS",
     "JobNotFoundError",
+    "KEEP_CHUNKING",
     "MAX_JOB_HISTORY",
     "STEP_NAMES",
     "model_stack_available",
 ]
 
 STEP_NAMES = ("scan", "index", "vectors", "ready")
+JOB_KINDS = ("index", "rebuild_vectors")
+# start_rebuild_vectors(chunking=KEEP_CHUNKING) leaves the passage setting alone.
+KEEP_CHUNKING = "keep"
 ACTIVE_STATUSES = frozenset({"queued", "running"})
 FINAL_STATUSES = frozenset({"succeeded", "failed", "cancelled"})
 MAX_JOB_HISTORY = 50
@@ -388,6 +394,82 @@ class JobManager:
             raise
         return snapshot
 
+    def start_rebuild_vectors(
+        self,
+        db_path: str | Path,
+        *,
+        model_name: str | None = None,
+        chunking: Any = KEEP_CHUNKING,
+        label: str | None = None,
+    ) -> dict:
+        """Re-split notes into passages and re-embed them in the background.
+
+        Runs :meth:`Index.rebuild_vectors` (see docs/11 section 9) as a job
+        with ``kind="rebuild_vectors"`` and the same dict shape and steps as
+        an indexing job: ``scan`` (finding notes that need new passages),
+        ``index`` (writing passages), ``vectors`` (embedding them; skipped for
+        a keyword-only collection) and ``ready``. ``chunking`` first changes
+        the collection's passage setting (``"default"``/True to turn passage
+        search on, None/``"off"`` to turn it off, or a settings dict); the
+        default keeps the current setting. The collection's own model is
+        loaded through the shared cache (``model_name`` only matters for a
+        collection without one). Cancelling stops between batches; notes
+        finished so far keep their new passages and a later run continues.
+        Raises :class:`UsageError` when a job is already running for the
+        same database or the setting is invalid.
+        """
+        if db_path is None or not str(db_path).strip():
+            raise UsageError("a collection database path is required")
+        keep = isinstance(chunking, str) and chunking.strip().lower() == KEEP_CHUNKING
+        option = None if keep else normalize_chunking(chunking)
+        db_key = _db_key(db_path)
+        job_id = uuid.uuid4().hex[:12]
+        data = {
+            "id": job_id,
+            "kind": "rebuild_vectors",
+            "label": label,
+            "db": str(Path(db_path).expanduser()),
+            "root": None,
+            "status": "queued",
+            "phase": "scan",
+            "done": 0,
+            "total": None,
+            "message": "Waiting to start",
+            "started_at": utcnow_iso(),
+            "finished_at": None,
+            "result": None,
+            "error": None,
+            "embed": None,
+            "model": None,
+            "options": {
+                "chunking": KEEP_CHUNKING if keep else option,
+            },
+            "counts": {"found": 0, "read": 0, "saved": 0, "embedded": 0},
+            "health": None,
+            "steps": [{"name": name, "status": "pending"} for name in STEP_NAMES],
+        }
+        job = _Job(data, db_key)
+        with self._lock:
+            for other in self._jobs.values():
+                if other.db_key == db_key and other.data["status"] in ACTIVE_STATUSES:
+                    raise UsageError("an indexing job is already running")
+            self._jobs[job_id] = job
+            self._trim_history()
+            snapshot = copy.deepcopy(data)
+        thread = threading.Thread(
+            target=self._run_rebuild,
+            args=(job, Path(db_path).expanduser(), model_name, not keep, option),
+            name=f"onefind-rebuild-{job_id}",
+            daemon=True,
+        )
+        job.thread = thread
+        try:
+            thread.start()
+        except RuntimeError as exc:  # pragma: no cover - interpreter shutting down
+            self._finish(job, "failed", error=_describe_error(exc, str(db_path)))
+            raise
+        return snapshot
+
     def get(self, job_id: str) -> dict:
         """A deep copy of the job dict; :class:`JobNotFoundError` if unknown."""
         with self._lock:
@@ -568,6 +650,110 @@ class JobManager:
                 total=int(total) if total is not None else None,
                 message="Building vectors for notes already in this collection" + suffix,
             )
+
+    def _on_rebuild(self, job: _Job, event: dict) -> None:
+        """Progress of :meth:`Index.rebuild_vectors` (counts are notes)."""
+        phase = str(event.get("phase") or "")
+        done = int(event.get("done") or 0)
+        total = event.get("total")
+        message = str(event.get("message") or "")
+        with self._lock:
+            data = job.data
+            counts = data["counts"]
+            steps = {step["name"]: step for step in data["steps"]}
+            if phase == "scan":
+                counts["found"] = max(counts["found"], int(total or 0))
+                steps["scan"]["status"] = "done"
+                steps["index"]["status"] = "active"
+                if steps["vectors"]["status"] == "pending":
+                    steps["vectors"]["status"] = "active"
+                message = message or "Looking for notes that need new passages"
+            elif phase in {"write", "embed"}:
+                counts["read"] = max(counts["read"], done)
+                counts["saved"] = max(counts["saved"], done)
+                if phase == "embed":
+                    counts["embedded"] = max(counts["embedded"], done)
+            elif phase == "done":
+                for name in ("scan", "index"):
+                    steps[name]["status"] = "done"
+                if steps["vectors"]["status"] in {"pending", "active"}:
+                    steps["vectors"]["status"] = "done"
+                steps["ready"]["status"] = "active"
+            if job.cancel_event.is_set():
+                message = "Cancelling - finishing the current batch"
+            data.update(
+                phase=phase if phase in {"scan", "write", "embed", "done"} else data["phase"],
+                done=done,
+                total=int(total) if total is not None else None,
+                message=message or data["message"],
+            )
+
+    def _run_rebuild(
+        self,
+        job: _Job,
+        db_path: Path,
+        model_name: str | None,
+        change_chunking: bool,
+        chunking: dict | None,
+    ) -> None:
+        index: Index | None = None
+        outcome: tuple[str, dict] | None = None
+        try:
+            self._update(job, status="running", message="Starting")
+            self._set_steps(job, scan="active")
+            if job.cancel_event.is_set():
+                raise OperationCancelled("rebuilding vectors was cancelled before it started")
+            if not db_path.is_file():
+                raise DataError(f"collection file not found: {db_path}")
+            index = Index.open(db_path)
+            if change_chunking:
+                index.set_chunking(chunking)
+            use_vectors = index.has_vectors()
+            self._update(job, embed=use_vectors)
+            if use_vectors:
+                self._attach(job, index, model_name)
+            else:
+                self._set_steps(job, vectors="skipped")
+            self._update(job, phase="scan", message="Looking for notes that need new passages")
+            result = index.rebuild_vectors(
+                progress=lambda event: self._on_rebuild(job, event),
+                cancel=job.cancel_event.is_set,
+            )
+            health = index.health()
+            rebuilt = int(result.get("rebuilt") or 0)
+            summary = (
+                f"Vectors rebuilt: {rebuilt} {'note' if rebuilt == 1 else 'notes'} now "
+                "searched passage by passage"
+                if rebuilt
+                else "Vectors are up to date; no note needed new passages"
+            )
+            outcome = ("succeeded", {"message": summary, "result": result, "health": health})
+        except OperationCancelled:
+            outcome = (
+                "cancelled",
+                {
+                    "message": "Rebuilding vectors was cancelled. Notes finished so far keep "
+                    "their new passages; run it again to finish."
+                },
+            )
+        except BaseException as exc:  # noqa: BLE001 - a job must always settle
+            outcome = ("failed", {"error": _describe_error(exc, str(db_path))})
+        finally:
+            if index is not None:
+                try:
+                    index.close()
+                except Exception:  # noqa: BLE001,S110 - best-effort cleanup
+                    pass
+            if outcome is None:  # pragma: no cover - defensive
+                outcome = (
+                    "failed",
+                    {
+                        "error": _error(
+                            "internal_error", "Rebuilding stopped unexpectedly.", retryable=True
+                        )
+                    },
+                )
+            self._finish(job, outcome[0], **outcome[1])
 
     def _resolve_embed(self, index: Index, embed: bool | None) -> tuple[bool, str | None]:
         """Decide whether this run builds vectors; returns (embed, note)."""

@@ -222,23 +222,22 @@ def test_search_passes_lexical_match(home, corpus, capsys, monkeypatch):
     assert seen == ["auto", "any"]
 
 
-def test_smoke_match_is_forwarded_only_when_supported(monkeypatch, capsys):
+def test_smoke_uses_the_apps_matching_by_default(monkeypatch, capsys):
     import onefind.evaluate as evaluate
 
-    captured = {}
+    captured = []
 
-    def fake_run_smoke(db, queries, k=5, model_name=None, *, lexical_match="all"):
-        captured["lexical_match"] = lexical_match
+    def fake_run_smoke(db, queries, k=5, model_name=None, *, lexical_match="auto"):
+        captured.append(lexical_match)
         return {"cases": 0, "answerable": 0, "hit_at_3": 0.0, "mrr_at_k": 0.0,
-                "no_answer_accuracy": 0.0, "rows": []}
+                "no_answer_accuracy": 0.0, "rows": [], "lexical_match": lexical_match}
 
     monkeypatch.setattr(evaluate, "run_smoke", fake_run_smoke)
-    assert main(["smoke", "--db", "x.db", "--match", "auto"]) == EXIT_OK
-    assert captured["lexical_match"] == "auto"
-
-    monkeypatch.setattr(evaluate, "run_smoke", lambda db, queries, k=5, model_name=None: {})
-    assert main(["smoke", "--db", "x.db", "--match", "auto"]) == EXIT_USAGE
-    capsys.readouterr()
+    assert main(["smoke", "--db", "x.db"]) == EXIT_OK
+    assert main(["smoke", "--db", "x.db", "--match", "all"]) == EXIT_OK
+    assert captured == ["auto", "all"]
+    out = capsys.readouterr().out
+    assert "keyword matching  : auto" in out and "keyword matching  : all" in out
 
 
 # -- model missing: keyword fallback and exit 3 (finding 5) ------------------------------

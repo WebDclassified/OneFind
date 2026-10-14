@@ -1,6 +1,8 @@
 // Index wizard: choose a folder (browser backed by GET /api/fs/list),
 // start a background job, follow it (GET /api/jobs/{id} every 400 ms),
-// then confirm readiness with a summary. Also runs reindex jobs for Manage.
+// then confirm readiness with a summary. Also runs reindex jobs for Manage
+// and "Rebuild vectors" jobs (kind "rebuild_vectors"), which share the
+// progress stepper with their own step labels.
 
 import { api } from "./api.js";
 import { button, byId, el } from "./dom.js";
@@ -21,6 +23,8 @@ const STEPS = [
   { name: "vectors", label: "Build vectors" },
   { name: "ready", label: "Ready" },
 ];
+/** Step labels of a "rebuild vectors" job (same step names as indexing). */
+const REBUILD_LABELS = { scan: "Find long notes", index: "Split long notes", vectors: "Build vectors", ready: "Ready" };
 const PHASE_STEP = { scan: "scan", read: "index", write: "index", prune: "index", model: "vectors", embed: "vectors", done: "ready" };
 
 const dialog = () => byId("index-dialog");
@@ -38,6 +42,8 @@ let finishTimer = 0;
 let excludeEdited = false; // an untouched exclude field keeps the folder's saved patterns
 let pickedFile = null; // a single file chosen in the browser (or typed) instead of the folder
 let relocateRootId = null; // "Locate…": the missing folder whose new place is being chosen
+let savedRoots = []; // the collection's folders and their saved exclude patterns (GET /api/roots)
+let excludePrefilled = null; // the folder whose saved patterns fill the exclude field, if any
 
 /* ---------- helpers ---------- */
 
@@ -71,18 +77,54 @@ export function parseExclude(text) {
  * folder, while a list (even an empty one) replaces them. A single file
  * never sends patterns, which would replace its parent folder's.
  */
-export function wizardIndexBody({ path, file = false, excludeText = "", excludeEdited: edited = false, embed = true }) {
+export function wizardIndexBody({ path, file = false, excludeText = "", excludeEdited: edited = false, embed = true, autoSync, collection }) {
   const body = { path, embed: embed ? null : false, prune: true, full: false };
   if (edited && !file) body.exclude = parseExclude(excludeText);
   // A folder picked on purpose is indexed whole, even when only one of its
   // files was indexed before (the server's default refreshes just that file).
   if (!file) body.scope = "folder";
+  // "Keep this collection up to date automatically" (saved in the collection).
+  if (typeof autoSync === "boolean") body.auto_sync = autoSync;
+  // The collection this was meant for: the server refuses (409
+  // collection_changed) when another one has become active meanwhile.
+  if (typeof collection === "string" && collection) body.collection = collection;
   return body;
 }
 
-/** A file the wizard can index on its own: supported text, or a .jsonl dataset. */
+/** Folder paths compared loosely: trailing separators, slash style, and case on Windows. */
+export function samePath(left, right) {
+  const norm = (value) => String(value || "").trim().replace(/[\\/]+$/, "").replace(/\\/g, "/");
+  const a = norm(left);
+  const b = norm(right);
+  if (!a || !b) return false;
+  if (a === b) return true;
+  const windows = /^[A-Za-z]:/.test(a) || /^[A-Za-z]:/.test(b);
+  return windows && a.toLowerCase() === b.toLowerCase();
+}
+
+/**
+ * The exclude patterns saved for `path` when it is one of the collection's
+ * folders (GET /api/roots), else null. Only the folder itself counts: a
+ * subfolder is indexed as part of its folder, with the folder's patterns.
+ */
+export function savedExcludesFor(roots, path) {
+  const root = (Array.isArray(roots) ? roots : []).find((item) => item && samePath(item.path, path));
+  if (!root) return null;
+  return Array.isArray(root.exclude) ? root.exclude.filter((item) => typeof item === "string" && item) : [];
+}
+
+/**
+ * Initial state of the wizard's auto-sync box: on for a new or still empty
+ * collection, otherwise whatever the collection already uses.
+ */
+export function wizardAutoSyncDefault(stats, { newCollection: makeNew = false } = {}) {
+  if (makeNew || !stats?.collection || !(Number(stats?.documents) > 0)) return true;
+  return Boolean(stats?.auto_sync?.enabled);
+}
+
+/** A file the wizard can index on its own: supported text, or a .jsonl dataset (the server marks both). */
 export function isPickableFile(entry) {
-  return entry?.kind === "file" && (Boolean(entry.supported) || /\.jsonl$/i.test(String(entry.name || "")));
+  return entry?.kind === "file" && Boolean(entry.supported);
 }
 
 /** The folder that holds `path` ("C:\\a\\b.md" -> "C:\\a", "/a/b.md" -> "/a"). */
@@ -133,10 +175,27 @@ export function jobPercent(job) {
   return Math.max(0, Math.min(100, Math.round((done / total) * 100)));
 }
 
+/** Step label for a job's step (indexing and rebuild jobs share step names). */
+export function stepLabel(name, kind = "index") {
+  if (kind === "rebuild_vectors" && REBUILD_LABELS[name]) return REBUILD_LABELS[name];
+  return STEPS.find((item) => item.name === name)?.label || name;
+}
+
 export function jobCountText(job) {
   const done = Number(job?.done) || 0;
   const total = Number(job?.total);
   const hasTotal = Number.isFinite(total) && total > 0;
+  if (job?.kind === "rebuild_vectors") {
+    // Counts are notes, not files or vectors.
+    switch (job?.phase) {
+      case "scan": return hasTotal ? `${plural(total, "long note")} to update` : "Looking for long notes…";
+      case "model": return "Loading the local model…";
+      case "write":
+      case "embed": return hasTotal ? `${formatInteger(done)} of ${plural(total, "note")}` : `${plural(done, "note")} updated`;
+      case "done": return "Finishing…";
+      default: return "Starting…";
+    }
+  }
   switch (job?.phase) {
     case "scan": return hasTotal ? `${formatInteger(done)} of ${plural(total, "file")} checked` : `Found ${plural(done, "file")}`;
     case "read":
@@ -255,6 +314,7 @@ function renderListing(data, { focus = null } = {}) {
 
   byId("fs-count").textContent = folderCountText(data);
   renderPlaces(data.places);
+  applySavedExcludes();
   updateStartButton();
   if (focus === "list") {
     // The button that was pressed is gone: continue from the new list.
@@ -343,6 +403,44 @@ function updateStartButton() {
   else if (listing) count.textContent = folderCountText(listing);
 }
 
+const EXCLUDE_HELP = "Comma or line separated patterns. Hidden folders and node_modules are always skipped. "
+  + "Patterns you enter replace the ones saved for a folder you indexed before; leave the field alone to keep them.";
+
+/**
+ * Show the saved exclude patterns of an already indexed folder in the
+ * Options field. They are only shown: an untouched field sends nothing, so
+ * the server keeps them; editing the field replaces them.
+ */
+function applySavedExcludes() {
+  const field = byId("index-exclude");
+  const help = byId("exclude-help");
+  const summary = byId("index-options-summary");
+  if (excludeEdited) return; // the person's own text stays
+  const path = relocateRootId === null ? listing?.path : null;
+  const saved = path ? savedExcludesFor(savedRoots, path) : null;
+  if (saved && saved.length) {
+    field.value = saved.join(", ");
+    excludePrefilled = path;
+    help.textContent = `These are the patterns saved for “${truncate(baseName(path), 40)}”. Editing them replaces the saved patterns; leave them as they are to keep them. Hidden folders and node_modules are always skipped.`;
+    if (summary) summary.textContent = `Options · ${plural(saved.length, "saved exclusion")}`;
+    return;
+  }
+  if (excludePrefilled !== null) field.value = "";
+  excludePrefilled = null;
+  help.textContent = EXCLUDE_HELP;
+  if (summary) summary.textContent = "Options";
+}
+
+async function loadSavedRoots() {
+  try {
+    const payload = await api.roots();
+    savedRoots = Array.isArray(payload?.roots) ? payload.roots : [];
+  } catch {
+    savedRoots = []; // an older server: nothing to pre-fill
+  }
+  if (dialog().open && dialog().dataset.step === "choose") applySavedExcludes();
+}
+
 function folderCountText(data) {
   const supported = Number(data?.supported_files);
   if (!Number.isFinite(supported)) return "";
@@ -420,6 +518,8 @@ async function startFromWizard(event) {
       excludeText: byId("index-exclude").value,
       excludeEdited,
       embed: byId("index-embed").checked,
+      autoSync: byId("index-autosync").checked,
+      collection: state.stats?.collection?.name || null,
     });
     const job = await withNetworkConfirm((confirm) => api.startIndex(body, confirm), { trigger: start });
     if (job === null) {
@@ -444,8 +544,8 @@ async function startFromWizard(event) {
 
 const STATUS_TEXT = { pending: "waiting", active: "in progress", done: "done", skipped: "skipped", failed: "failed" };
 
-function stepItem(step, index) {
-  const label = STEPS.find((item) => item.name === step.name)?.label || step.name;
+function stepItem(step, index, kind) {
+  const label = stepLabel(step.name, kind);
   return el("li", { class: "stepper-step", dataset: { step: step.name, status: "pending" } },
     el("span", { class: "stepper-marker", attrs: { "aria-hidden": "true" } }, el("span", { text: String(index + 1) })),
     el("span", { class: "stepper-label", text: label }),
@@ -458,11 +558,11 @@ function stepItem(step, index) {
  * would restart every pulse and replay every check mark. A step's check
  * "pops" once, when it first becomes done.
  */
-function renderSteps(steps) {
+function renderSteps(steps, kind = "index") {
   const list = byId("job-steps");
-  const names = steps.map((step) => step.name).join(",");
+  const names = `${kind}:${steps.map((step) => step.name).join(",")}`;
   if (list.dataset.names !== names) {
-    list.replaceChildren(...steps.map(stepItem));
+    list.replaceChildren(...steps.map((step, index) => stepItem(step, index, kind)));
     list.dataset.names = names;
   }
   steps.forEach((step, index) => {
@@ -488,10 +588,17 @@ function displaySteps(job) {
   return steps;
 }
 
+const isRebuild = (job) => job?.kind === "rebuild_vectors";
+
 function renderProgress(job) {
-  byId("index-eyebrow").textContent = "Indexing";
-  byId("index-title").textContent = job.root ? `Indexing “${truncate(baseName(job.root), 40)}”` : "Indexing";
-  renderSteps(displaySteps(job));
+  if (isRebuild(job)) {
+    byId("index-eyebrow").textContent = "Maintenance";
+    byId("index-title").textContent = "Rebuilding vectors";
+  } else {
+    byId("index-eyebrow").textContent = "Indexing";
+    byId("index-title").textContent = job.root ? `Indexing “${truncate(baseName(job.root), 40)}”` : "Indexing";
+  }
+  renderSteps(displaySteps(job), isRebuild(job) ? "rebuild_vectors" : "index");
   const bar = byId("job-progress");
   let percent = jobPercent(job);
   let count = jobCountText(job);
@@ -513,13 +620,17 @@ function renderProgress(job) {
 }
 
 function showProgressStep(job) {
-  if (dialog().dataset.step !== "progress") {
-    setStep("progress");
-    byId("job-steps").dataset.names = "";
+  const footKind = isRebuild(job) ? "rebuild" : "index";
+  if (dialog().dataset.step !== "progress" || byId("index-foot").dataset.kind !== footKind) {
+    if (dialog().dataset.step !== "progress") {
+      setStep("progress");
+      byId("job-steps").dataset.names = "";
+    }
     setFoot(
       button("Close", { variant: "secondary", attrs: { "data-close": "" } }),
-      button("Cancel indexing", { variant: "danger-ghost", iconName: "stop", onClick: cancelJob }),
+      button(isRebuild(job) ? "Cancel rebuild" : "Cancel indexing", { variant: "danger-ghost", iconName: "stop", onClick: cancelJob }),
     );
+    byId("index-foot").dataset.kind = footKind;
     renderProgress(job);
     focusIfLost(byId("job-count"));
     return;
@@ -535,7 +646,7 @@ async function cancelJob(event) {
     const job = await api.cancelJob(currentJob.id);
     if (job) handleJobUpdate(job);
   } catch (problem) {
-    toast(problem?.message || "Indexing could not be cancelled.", { tone: "danger" });
+    toast(problem?.message || (isRebuild(currentJob) ? "The rebuild could not be cancelled." : "Indexing could not be cancelled."), { tone: "danger" });
   }
 }
 
@@ -553,9 +664,45 @@ function summaryRows(result) {
     el("div", { class: "summary-item" }, el("dt", { text: label }), el("dd", { text: formatInteger(value) })));
 }
 
-function showDone(job) {
+/** Summary rows ([label, value]) of a finished "rebuild vectors" job. */
+export function rebuildSummaryRows(result) {
+  const rows = [
+    ["Notes updated", result?.rebuilt],
+    ["Passages", result?.passages],
+    ["Vectors built", result?.vectors_embedded],
+  ].filter(([, value]) => value !== null && value !== undefined && Number.isFinite(Number(value)));
+  const shown = rows.filter(([, value]) => Number(value) > 0);
+  return shown.length ? shown : rows.slice(0, 1);
+}
+
+function showRebuildDone(job) {
   const result = job.result || {};
   setStep("done");
+  byId("index-foot").dataset.kind = "";
+  byId("index-eyebrow").textContent = "Maintenance finished";
+  byId("index-title").textContent = "Vectors rebuilt";
+  const rebuilt = Number(result.rebuilt) || 0;
+  const passages = Boolean(result.chunking) && typeof result.chunking === "object";
+  byId("done-title").textContent = rebuilt ? `${plural(rebuilt, "note")} updated` : "Vectors are up to date";
+  byId("done-copy").textContent = passages
+    ? "Long notes are now searched passage by passage, so meaning search finds answers anywhere in them."
+    : "Every note has one vector again.";
+  byId("done-summary").replaceChildren(...rebuildSummaryRows(result).map(([label, value]) =>
+    el("div", { class: "summary-item" }, el("dt", { text: label }), el("dd", { text: formatInteger(value) }))));
+  byId("done-skipped").hidden = true;
+  const startButton = button("Start searching", { variant: "primary", iconName: "search", onClick: startSearching });
+  setFoot(button("Close", { variant: "secondary", attrs: { "data-close": "" } }), startButton);
+  if (dialog().open) startButton.focus();
+}
+
+function showDone(job) {
+  if (isRebuild(job)) {
+    showRebuildDone(job);
+    return;
+  }
+  const result = job.result || {};
+  setStep("done");
+  byId("index-foot").dataset.kind = "";
   byId("index-eyebrow").textContent = "Indexing finished";
   byId("index-title").textContent = "Ready to search";
   const total = Number(result.total_documents);
@@ -575,8 +722,34 @@ function showDone(job) {
   if (dialog().open) startButton.focus();
 }
 
-function showFailed(job) {
+function showRebuildFailed(job) {
   setStep("failed");
+  byId("index-foot").dataset.kind = "";
+  const cancelled = job.status === "cancelled";
+  byId("index-eyebrow").textContent = cancelled ? "Cancelled" : "Stopped";
+  byId("index-title").textContent = cancelled ? "Rebuilding vectors was cancelled" : "Vectors could not be rebuilt";
+  byId("failed-title").textContent = cancelled ? "Stopped at your request" : "Something went wrong while rebuilding vectors";
+  byId("failed-message").textContent = cancelled
+    ? "Notes finished so far keep their new passages. Run it again any time to finish the rest."
+    : job.error?.message || job.message || "The vectors could not be rebuilt.";
+  byId("failed-safe").textContent = "Search keeps working: every note is either fully updated or unchanged.";
+  byId("failed-safe").hidden = false;
+  const retry = button(cancelled ? "Continue" : "Try again", {
+    variant: "primary",
+    iconName: "refresh",
+    onClick: (event) => rebuildVectors({ chunking: "keep", trigger: event.currentTarget }),
+  });
+  setFoot(button("Close", { variant: "secondary", attrs: { "data-close": "" } }), retry);
+  focusIfLost(retry);
+}
+
+function showFailed(job) {
+  if (isRebuild(job)) {
+    showRebuildFailed(job);
+    return;
+  }
+  setStep("failed");
+  byId("index-foot").dataset.kind = "";
   const cancelled = job.status === "cancelled";
   byId("index-eyebrow").textContent = cancelled ? "Cancelled" : "Stopped";
   byId("index-title").textContent = cancelled ? "Indexing was cancelled" : "Indexing could not finish";
@@ -684,16 +857,18 @@ function onJobFinished(job) {
     // Another collection is active now: its folders are not this queue's.
     resetJobQueue();
   }
+  const rebuild = isRebuild(job);
   if (job.status === "succeeded") {
     const finish = () => {
       finishTimer = 0;
       showDone(job);
-      announce("Indexing finished. Your collection is ready.");
+      announce(rebuild ? "Vectors rebuilt." : "Indexing finished. Your collection is ready.");
     };
     window.clearTimeout(finishTimer);
     if (open && dialog().dataset.step === "progress" && !reducedMotion()) {
       // Every step resolves to a check (and the bar fills) before the summary replaces them.
-      renderSteps(jobSteps(job).map((step) => ({ ...step, status: step.status === "skipped" ? "skipped" : "done" })));
+      renderSteps(jobSteps(job).map((step) => ({ ...step, status: step.status === "skipped" ? "skipped" : "done" })),
+        rebuild ? "rebuild_vectors" : "index");
       byId("job-progress").classList.remove("is-indeterminate");
       byId("job-progress").style.setProperty("--progress", "100%");
       byId("job-count").textContent = "Done";
@@ -701,11 +876,13 @@ function onJobFinished(job) {
     } else {
       finish();
     }
-    if (!open) toast("Index ready", { action: { label: "Search", onClick: () => byId("search-input").focus() } });
+    if (!open) toast(rebuild ? "Vectors rebuilt" : "Index ready", { action: { label: "Search", onClick: () => byId("search-input").focus() } });
   } else {
     showFailed(job);
-    announce(job.status === "cancelled" ? "Indexing cancelled." : "Indexing could not finish.");
-    if (!open) toast(job.status === "cancelled" ? "Indexing cancelled" : "Indexing could not finish", { tone: job.status === "cancelled" ? "info" : "danger" });
+    const cancelled = job.status === "cancelled";
+    const what = rebuild ? "Rebuilding vectors" : "Indexing";
+    announce(cancelled ? `${what} cancelled.` : `${what} could not finish.`);
+    if (!open) toast(cancelled ? `${what} cancelled` : `${what} could not finish`, { tone: cancelled ? "info" : "danger" });
   }
   actions.onIndexComplete?.(job);
 }
@@ -767,6 +944,8 @@ async function startRootJob(root, options) {
       embed: options.embed ?? null,
       prune: true,
       full: Boolean(options.full),
+      // A queued folder belongs to this collection only (409 collection_changed otherwise).
+      ...(queueCollection ? { collection: queueCollection } : {}),
     }, confirm));
     if (job === null) {
       // Declined: skip this network folder and carry on with the rest.
@@ -847,6 +1026,39 @@ export function splitRoots(changes) {
   };
 }
 
+/**
+ * Re-split long notes into passages and rebuild their vectors (a background
+ * job followed in the same progress dialog as indexing). chunking: "keep"
+ * (finish a pending rebuild), "default" (turn passage search on) or "off".
+ */
+export async function rebuildVectors({ chunking = "keep", trigger } = {}) {
+  if (jobRunning()) {
+    showJobProgress({ trigger });
+    return;
+  }
+  resetJobQueue();
+  newCollection = false;
+  openDialog(dialog(), { trigger });
+  dialog().dataset.step = "";
+  showProgressStep({ kind: "rebuild_vectors", phase: "scan", status: "queued", root: null, done: 0, total: null, message: "Starting…" });
+  try {
+    const job = await api.rebuildVectors(chunking);
+    trackJob(job);
+  } catch (problem) {
+    currentJob = null;
+    const failed = {
+      kind: "rebuild_vectors",
+      status: "failed",
+      root: null,
+      error: { message: problem?.message || "The rebuild could not start.", action: problem?.action || null },
+    };
+    if (dialog().open) showFailed(failed);
+    else toast(failed.error.message, { tone: "danger" });
+    announce("Rebuilding vectors could not start.");
+    actions.onIndexComplete?.(failed);
+  }
+}
+
 export function showJobProgress({ trigger } = {}) {
   if (finishTimer) return;
   openDialog(dialog(), { trigger });
@@ -869,13 +1081,19 @@ export function openIndexWizard({ trigger, newCollection: makeNew = false, path,
   byId("index-name").value = "";
   byId("index-exclude").value = "";
   excludeEdited = false;
+  excludePrefilled = null;
+  savedRoots = [];
+  applySavedExcludes();
   byId("index-embed").checked = true;
+  byId("index-autosync").checked = wizardAutoSyncDefault(state.stats, { newCollection: makeNew });
   byId("fs-error").hidden = true;
   showNameError("");
   showChoose();
   openDialog(dialog(), { trigger });
   const start = path || listing?.path || storage.get(LAST_FOLDER_KEY) || "";
   loadDir(start, { fallback: start ? null : "Documents" });
+  // A new collection has no folders yet; otherwise show an indexed folder's saved patterns.
+  if (!makeNew && state.stats?.collection) loadSavedRoots();
   (newCollection ? byId("index-name") : byId("fs-path")).focus();
 }
 
@@ -899,6 +1117,7 @@ export function initIndexWizard() {
     reindex: (options, extra) => reindex(options, extra),
     resetJobQueue,
     addVectors: () => reindex({ embed: true }),
+    rebuildVectors: (options) => rebuildVectors(options),
     jobRunning,
   });
 }

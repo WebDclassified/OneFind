@@ -26,6 +26,7 @@ All 15 states in light and dark, at desktop and phone widths, are in
 - [What it does](#what-it-does)
 - [Two-minute quickstart](#two-minute-quickstart)
 - [Collections, backups and moving to another computer](#collections-backups-and-moving-to-another-computer)
+- [Auto-sync](#auto-sync)
 - [Privacy](#privacy)
 - [Keyboard shortcuts](#keyboard-shortcuts)
 - [CLI quick reference](#cli-quick-reference)
@@ -144,7 +145,9 @@ It does **not** contain your original files, so OneFind never moves, edits or de
 |---|---|---|
 | Create / switch | Header → collection switcher → *New collection…* | `onefind collections create Work` / `onefind collections use Work` |
 | Add a folder | *Index a folder*, or Manage → Maintenance → *Add a folder…* | `onefind index ~/Notes --collection Work --embed` |
-| Pick up changes | Manage → Health → *Update index* | `onefind index ~/Notes --collection Work --prune` |
+| Pick up changes | Automatic with **Auto-sync** (Manage → Health), or Manage → Health → *Update index* | `onefind watch --collection Work`, or `onefind index ~/Notes --collection Work --prune` |
+| A folder moved | Manage → Health → *Locate…* next to the missing folder | `onefind folders relocate OLD NEW --collection Work` |
+| Stop indexing a folder | Manage → Health → *Remove from collection* | `onefind folders remove FOLDER --collection Work` |
 | Back up | Manage → Backups → *Back up now* | `onefind backup --collection Work` |
 | Restore | Manage → Backups → *Restore…* → *Restore as a new collection* or *Replace current…* | `onefind restore BACKUP.db --as "Work restored"` |
 | Open a moved file | Collection switcher → *Open existing collection file…* | `onefind collections create Work --db ~/Moved/work.db` |
@@ -159,6 +162,29 @@ across, and on the new machine choose **Open existing collection file…** (or `
 create NAME --db PATH`). Search and preview work straight away, because the text travels inside the
 file. *Open* and *Show in folder* need the original notes folder at the same path. Re-index from
 the folder's new location to update paths.
+
+---
+
+## Auto-sync
+
+Turn on **Auto-sync** (Manage → Health, or the *Keep this collection up to date automatically* box
+in the index wizard, which is on for new collections) and OneFind keeps the index up to date while
+you write. It checks your folders every few seconds and updates the index when notes are added,
+changed or deleted. Everything stays on this computer.
+
+- **Gentle polling, no extra dependency.** A stat-only walk (file names, sizes and modification
+  times; nothing is read) honours your exclude patterns and the built-in skips. A change is indexed
+  only after the folder has stayed the same for two checks, so a note that is still being saved is
+  never indexed half-written. Very large folders are checked less often, which keeps CPU use low.
+- **Out of the way.** The work runs as a normal incremental update in the background: the status
+  pill reads *Ready · Auto-sync on*, briefly *Syncing 3 changes…*, and results refresh quietly. A
+  manual update, rebuild or maintenance task always takes priority.
+- **Careful.** Folders on other computers (network shares) are never polled. A folder that is
+  missing, unplugged or suddenly empty keeps its notes in the index.
+- **Saved in the collection.** The on/off setting lives in the collection's `.db` file, so it
+  travels with backups. Collections made before 1.2.1 start with it off. `onefind serve` honours
+  it (`--no-auto-sync` turns it off for that server), and `onefind watch` runs the same
+  auto-sync in a terminal until Ctrl+C.
 
 ---
 
@@ -215,10 +241,15 @@ success, `2` usage error, `3` environment problem, `4` data error, `130` cancell
 | Command | What it does |
 |---|---|
 | `onefind check [--full] [--json]` | Verify Python, SQLite FTS5, sqlite-vec and (with `--full`) load the model |
-| `onefind serve [--db FILE] [--home DIR] [--port 8080] [--no-open] [--allow-remote]` | Run the web app (library mode without `--db`) |
+| `onefind serve [--db FILE] [--home DIR] [--port 8080] [--no-open] [--allow-remote] [--no-auto-sync]` | Run the web app (library mode without `--db`); keeps auto-sync collections up to date |
+| `onefind watch [--collection NAME] [--interval S]` / `onefind watch --set on\|off` | Auto-sync in the foreground until Ctrl+C / save a collection's auto-sync setting |
 | `onefind index PATH [--collection NAME] [--embed] [--exclude PATTERN]… [--prune] [--full] [-q]` | Index or update a folder (incremental; exclusions are remembered per folder) |
 | `onefind search QUERY [--mode lexical\|semantic\|hybrid] [--k N] [--folder F] [--type md] [--tag T] [--since YYYY-MM-DD] [--explain]` | Search from the terminal |
-| `onefind status [--no-scan] [--json]` | Health, changed files per folder, and the last indexing run |
+| `onefind status [--no-scan] [--json]` | Health, passages, changed files per folder, and the last indexing run |
+| `onefind folders list [--json]` | The collection's folders, with ids, note counts, saved exclusions and missing folders |
+| `onefind folders remove FOLDER [--keep-documents]` | Forget a folder; its notes leave the index unless `--keep-documents` (files are never touched) |
+| `onefind folders relocate OLD NEW` | Point a moved folder at its new place; every note keeps its id |
+| `onefind rebuild-vectors [--chunking keep\|default\|off] [-q]` | Split long notes into passages and rebuild their vectors (Ctrl+C stops cleanly; rerun to continue) |
 | `onefind collections list [--json]` | List collections (`*` = active) |
 | `onefind collections create NAME [--db FILE]` | New collection, or register an existing `.db` |
 | `onefind collections use NAME` | Make a collection active |
@@ -231,7 +262,10 @@ success, `2` usage error, `3` environment problem, `4` data error, `130` cancell
 | `onefind remove DOC_ID…` | Remove notes from the index (files on disk are untouched) |
 | `onefind eval DATASET` | Build and evaluate a BEIR dataset (research) |
 | `onefind sweep-alpha DATASET --db FILE` | Compare linear fusion weights against RRF (research) |
-| `onefind smoke --db FILE [--queries FILE]` | Run JSONL gold queries against an index |
+| `onefind smoke --db FILE [--queries FILE] [--match auto\|all\|any]` | Run JSONL gold queries against an index (same keyword matching as the app by default) |
+
+Read and maintenance commands, including `folders`, `watch` and `rebuild-vectors`, take `--db` /
+`--collection` and fall back to the active collection.
 
 Advanced search flags: `--precision float|int8|binary`, `--rerank`, `--candidate-depth N`,
 `--fusion rrf|linear`, `--alpha A`, `--rrf-k K`. Run `onefind <command> --help` for details.
@@ -249,16 +283,22 @@ OneFind is designed for **personal and small-team collections on one computer**.
   searches scan every vector. Manage → Health says when you cross these lines. Measured hybrid p95
   latency is about **175 to 220 ms** on 3.6k to 5.2k-document BEIR corpora on a laptop CPU (see
   below).
-- **One vector per note.** Each note is embedded as a whole and the model reads roughly its first
-  256 tokens, so meaning search represents long notes by their opening. Keyword search covers the
+- **Long notes are split into passages.** The model reads roughly 256 tokens (about 200 words) per
+  text, so new collections split notes longer than 200 words into overlapping passages, embed each
+  one, and rank a note by its best passage. The preview marks the passage a meaning match came
+  from. Collections created before 1.2.1 keep one vector per note (meaning search sees only the
+  opening of long notes) until you rebuild their vectors: Manage → Health offers *Split long
+  notes*, or run `onefind rebuild-vectors --collection NAME --chunking default`. It runs in the
+  background, can be cancelled, and continues where it stopped. Keyword search always covers the
   full text.
 - **Plain text only.** No PDF, Word, HTML or OCR. Files over 5 MB, binary files and empty files are
   skipped and listed as skipped after indexing.
 - **English-first model.** all-MiniLM-L6-v2 is trained mainly on English. Keyword search works for
   any language that FTS5's `unicode61` tokenizer can split.
-- **Single user, local only.** No accounts, sharing, sync or live folder watching. Run *Update
-  index* (or `onefind index … --prune`) to pick up changes, and Manage → Health tells you when
-  folders have changed.
+- **Single user, local only.** No accounts, sharing or cloud sync. Folder changes are picked up
+  by polling (Auto-sync, every few seconds) rather than file-system events, so a saved note appears
+  a few seconds later; with Auto-sync off, run *Update index* (or `onefind index … --prune`) and
+  Manage → Health tells you when folders have changed.
 - **Quantized speed.** int8 and binary match float quality closely, but this implementation does
   **not** reproduce the paper's quantized speed advantage (details below).
 
@@ -271,7 +311,7 @@ pip install -e ".[model,eval,serve,dev]"
 pytest
 ```
 
-More than 700 tests cover storage and the v2→v3 migration, ingestion, snippets, search quality and
+More than 950 tests cover storage and the v2→v3 migration, ingestion, snippets, search quality and
 calibration, the collection library, background jobs, the HTTP API, the CLI, and static UI
 contracts. Fake embedders cover edge cases, and a small real-MiniLM suite covers integration. The
 model-free subset that CI runs is listed in `.github/workflows/ci.yml`.
@@ -367,7 +407,9 @@ intertidal ecology, bicycle mechanics, sleep, composting, clouds, music theory, 
 corrosion, geometry, library operations, personal finance, vector search and ceramics. It also has
 two same-stem documents in different folders to test identity safety.
 `sample-data/queries.jsonl` provides 26 cases (25 answerable, one no-answer). The current local run
-achieves **1.000 Hit@3, 1.000 MRR@5 and 1.000 no-answer accuracy**:
+(2026-10-14, the app's `auto` keyword matching, passages on) achieves **1.000 Hit@3, 1.000 MRR@5
+and 1.000 no-answer accuracy**; the 202-case showcase set (`showcase-data/queries.jsonl`) scores
+0.984 Hit@3, 0.967 MRR@5 and 1.000 no-answer accuracy, the same as with `--match all`:
 
 ```bash
 onefind index ./sample-data --db demo.db --embed

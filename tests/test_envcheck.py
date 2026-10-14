@@ -60,6 +60,10 @@ def test_all_advertised_subcommands_are_real():
         "check", "index", "search", "eval", "sweep-alpha", "smoke", "serve",
         # v1.2 (docs/11-implementation-contract.md section 7)
         "collections", "status", "backup", "restore", "doctor", "compact", "remove",
+        # v1.2.1 auto-sync (docs/11-implementation-contract.md section 10)
+        "watch",
+        # v1.2.1 passage chunking (section 9) and folder management
+        "rebuild-vectors", "folders",
     }
 
 
@@ -70,7 +74,8 @@ def test_real_subcommands_require_their_arguments():
 
     for argv in (
         ["index"], ["search"], ["eval"], ["sweep-alpha"], ["smoke"],
-        ["collections"], ["restore"], ["remove"],
+        ["collections"], ["restore"], ["remove"], ["folders"],
+        ["folders", "remove"], ["folders", "relocate", "OLD"],
     ):
         with pytest.raises(SystemExit) as excinfo:
             main(argv)

@@ -42,7 +42,7 @@ source .venv/bin/activate
 ```bash
 python -m pip install --upgrade pip
 pip install -e ".[model,eval,serve,dev]"
-onefind --version        # onefind 1.2.0
+onefind --version        # onefind 1.2.1
 ```
 
 The command is lowercase `onefind` on Windows, macOS and Linux. `python -m onefind.cli …` works
@@ -154,6 +154,12 @@ onefind status                 # --no-scan skips the folder scan; --json for scr
 
 # Remove a note from the index (the file is untouched; re-indexing adds it back unless excluded)
 onefind remove drafts/old-idea.md
+
+# The folders a collection indexes (ids, note counts, saved exclusions, missing folders)
+onefind folders list
+onefind folders relocate ~/OldNotes ~/Notes      # a folder moved: notes keep their ids (OLD may be its [id])
+onefind folders remove ~/Archive                 # forget a folder and drop its notes (files untouched)
+onefind folders remove ~/Archive --keep-documents  # forget it but keep its notes searchable
 ```
 
 `index` prints live progress to stderr (`-q` silences it) and a summary such as
@@ -199,10 +205,18 @@ location.
 onefind doctor                 # integrity check: database file, keyword index, vectors (exit 4 if problems remain)
 onefind doctor --repair        # rebuild the keyword index, drop leftovers, re-embed missing vectors
 onefind compact                # checkpoint the WAL and VACUUM; prints before -> after size
+
+# Long notes (docs/11 section 9): split notes over 200 words into passages and rebuild their vectors
+onefind rebuild-vectors --chunking default   # turn passage search on (collections made before 1.2.1)
+onefind rebuild-vectors                      # finish a pending or cancelled rebuild (keeps the setting)
+onefind rebuild-vectors --chunking off       # back to one vector per note
 ```
 
-All three take `--db` / `--collection`. The app has the same actions under **Manage →
-Maintenance**, plus *Full rebuild*, *Reindex with vectors* and *Clear collection…*.
+All of these take `--db` / `--collection`. `rebuild-vectors` shows live progress (`-q` silences
+it); the first `Ctrl+C` stops between batches of notes (exit 130) and a rerun continues. `status`
+prints a `passages` line, and `status`/`doctor` say when a rebuild is needed or recommended. The
+app has the same actions under **Manage → Health / Maintenance**, plus *Full rebuild*, *Reindex
+with vectors* and *Clear collection…*.
 
 **Exit codes:** `0` success, `2` usage/validation, `3` environment, `4` data error (missing
 collection, failed integrity check), `130` cancelled.
@@ -295,6 +309,12 @@ onefind index ./sample-data --db demo.db --embed
 onefind smoke --db demo.db --queries sample-data/queries.jsonl
 ```
 
+`smoke` uses the app's keyword matching (`--match auto`, the default; `all` or `any` to compare).
+A no-answer case passes when nothing strong is returned. Re-baselined 2026-10-14: sample-data
+1.000 Hit@3, 1.000 MRR@5, 1.000 no-answer; `showcase-data` (index `./showcase-data`, queries
+`showcase-data/queries.jsonl`) 0.984 Hit@3, 0.967 MRR@5, 1.000 no-answer, identical with
+`--match all`.
+
 ## 13. Research search flags
 
 ```bash
@@ -317,10 +337,10 @@ state-changing endpoint added in v1.2 requires the header `X-OneFind-Request: 1`
 | Status | `GET /health`, `GET /api/stats` (status, status sentence, size class, active job) |
 | Search | `POST /api/search`, `POST /api/search/stream` (NDJSON stages, then the result), `GET /api/facets` |
 | Collections | `GET/POST /api/collections`, `POST /api/collections/{open,active,rename,remove}` |
-| Indexing | `GET /api/fs/list`, `POST /api/index` (202 + job), `GET /api/jobs[/{id}]`, `POST /api/jobs/{id}/cancel`, `GET /api/index/changes` |
+| Indexing | `GET /api/fs/list`, `POST /api/index` (202 + job; optional `collection` guard), `GET /api/jobs[/{id}]`, `POST /api/jobs/{id}/cancel`, `GET /api/index/changes`, `GET /api/roots`, `POST /api/roots/{remove,relocate}`, `GET/POST /api/autosync` |
 | Documents | `GET /api/documents/{doc_id}`, `POST /api/documents/open`, `POST /api/documents/remove`, `GET /api/recent-documents` |
 | Personal | `GET/POST /api/history`, `POST /api/history/clear`, `GET/POST /api/saved`, `DELETE /api/saved/{id}`, `GET/POST /api/bookmarks`, `DELETE /api/bookmarks/{doc_id}` |
-| Maintenance | `POST /api/maintenance/{backup,restore,check,repair,compact,clear}`, `GET /api/backups` |
+| Maintenance | `POST /api/maintenance/{backup,restore,check,repair,compact,clear}`, `POST /api/maintenance/rebuild-vectors` (202 + job), `GET /api/backups` |
 
 ```bash
 curl -X POST http://127.0.0.1:8080/api/search \

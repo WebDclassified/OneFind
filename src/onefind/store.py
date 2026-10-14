@@ -1,9 +1,11 @@
 """SQLite storage layer: connection, schema, transactional document upserts.
 
 Schema follows docs/05-backend-design.md plus the v1.2 additions in
-docs/11-implementation-contract.md. V1 indexes whole documents (one chunk per
-doc) so the BEIR evaluation protocol stays honest; the chunks table owns
-stable row_ids that the vec tables key off.
+docs/11-implementation-contract.md. The chunks table owns stable row_ids
+that the vec tables key off. Since v1.2.1 a long note may be split into
+several passages (chunks seq 0..n-1, one vector each; docs/11 section 9);
+the setting is per index, new collections have it on, and BEIR evaluation
+turns it off so every document keeps exactly one whole-document vector.
 
 Vector storage is created lazily on first embedder attachment because its DDL
 depends on the model's dimension:
@@ -27,6 +29,14 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Callable, Iterable
 
+from .chunking import (
+    DEFAULT_CHUNKING,
+    chunking_from_meta,
+    chunking_to_meta,
+    count_words,
+    normalize_chunking,
+    split_passages,
+)
 from .errors import DataError, EnvError, OperationCancelled, UsageError
 
 if TYPE_CHECKING:  # pragma: no cover
@@ -45,8 +55,19 @@ MAX_NAME_CHARS = 200
 MAX_QUERY_CHARS = 4000
 MAX_NOTE_CHARS = 4000
 
+# schema_meta keys for passage chunking (docs/11 section 9). ``chunking`` is
+# the setting new and changed notes are written with (JSON or "off"; absent =
+# off, i.e. one whole-note passage per document as before v1.2.1).
+# ``chunking_built`` is the setting every stored note is known to follow;
+# while the two differ (or built is "mixed") a vector rebuild is pending.
+META_CHUNKING = "chunking"
+META_CHUNKING_BUILT = "chunking_built"
+CHUNKING_MIXED = "mixed"
+# Documents re-chunked per committed batch by Index.rebuild_vectors().
+REBUILD_BATCH_DOCS = 16
+
 # schema_meta keys that describe the collection itself and survive clear().
-_IDENTITY_META_KEYS = ("schema_version", "collection_name", "created_at")
+_IDENTITY_META_KEYS = ("schema_version", "collection_name", "created_at", META_CHUNKING)
 # Bound parameter lists stay well below SQLite's host-parameter limit.
 _SQL_CHUNK = 500
 
@@ -406,6 +427,7 @@ class Index:
         self.embedder: "SentenceEmbedder | None" = None
         self._vector_cache: tuple["object", list[int]] | None = None
         self._vector_cache_version: int | None = None
+        self._census_cache: tuple[tuple, dict] | None = None
 
     # -- lifecycle ---------------------------------------------------------
 
@@ -487,11 +509,20 @@ class Index:
                 # schema. executescript commits any pending transaction first,
                 # so BEGIN/COMMIT live inside the script. Every statement is
                 # idempotent, so a racing creator simply waits and no-ops.
+                # New collections split long notes into passages by default
+                # (evaluate.py turns this off so BEIR runs stay whole-document).
+                default_chunking = chunking_to_meta(dict(DEFAULT_CHUNKING))
                 conn.executescript(
                     "BEGIN IMMEDIATE;\n"
                     + _SCHEMA
                     + "INSERT INTO schema_meta(key, value) VALUES ('created_at', '"
                     + utcnow_iso()
+                    + "') ON CONFLICT(key) DO NOTHING;\n"
+                    + f"INSERT INTO schema_meta(key, value) VALUES ('{META_CHUNKING}', '"
+                    + default_chunking
+                    + "') ON CONFLICT(key) DO NOTHING;\n"
+                    + f"INSERT INTO schema_meta(key, value) VALUES ('{META_CHUNKING_BUILT}', '"
+                    + default_chunking
                     + "') ON CONFLICT(key) DO NOTHING;\n"
                     + f"PRAGMA user_version = {SCHEMA_VERSION};\n"
                     + "COMMIT;"
@@ -595,6 +626,7 @@ class Index:
     def _invalidate_vector_cache(self) -> None:
         self._vector_cache = None
         self._vector_cache_version = None
+        self._census_cache = None
 
     # -- embedder attachment ---------------------------------------------------
 
@@ -684,11 +716,10 @@ class Index:
     def _missing_vector_rows(self) -> list[sqlite3.Row]:
         return self.conn.execute(
             """
-            SELECT c.row_id, c.text, d.title
+            SELECT c.row_id, c.doc_id, c.text, d.title
             FROM chunks c
             JOIN documents d ON d.doc_id = c.doc_id
-            LEFT JOIN vec_float v ON v.rowid = c.row_id
-            WHERE v.rowid IS NULL
+            WHERE c.row_id NOT IN (SELECT rowid FROM vec_float)
             ORDER BY c.row_id
             """
         ).fetchall()
@@ -778,21 +809,25 @@ class Index:
         total = len(docs) if hasattr(docs, "__len__") else None  # type: ignore[arg-type]
         processed = 0
         batch: list[Document] = []
+        # One setting for the whole call: every note it writes follows it.
+        chunking = self.chunking_config()
 
         def _flush(batch: list[Document]) -> None:
+            plans = [split_passages(document.body, chunking) for document in batch]
             # Encode first, with no transaction open: the model can take
             # seconds per batch and must not hold the collection's write lock.
             vectors = None
             if self.embedder is not None:
-                from .embed import compose_embed_text
-
-                vectors = self._encode_vectors(
-                    [compose_embed_text(document.title, document.body) for document in batch]
+                vectors = self._passage_vectors(
+                    [
+                        (document.doc_id, document.title, passages)
+                        for document, passages in zip(batch, plans)
+                    ]
                 )
+            vec_table = self._vec_table_exists()
             try:
                 now = utcnow_iso()
-                row_ids: list[int] = []
-                for document in batch:
+                for position, document in enumerate(batch):
                     meta_json = (
                         json.dumps(document.meta, sort_keys=True)
                         if document.meta
@@ -837,15 +872,11 @@ class Index:
                             document.root_id,
                         ),
                     )
-                    row = self.conn.execute(
-                        """
-                        INSERT INTO chunks (doc_id, seq, text) VALUES (?, 0, ?)
-                        ON CONFLICT(doc_id, seq) DO UPDATE SET text = excluded.text
-                        RETURNING row_id
-                        """,
-                        (document.doc_id, document.body),
-                    ).fetchone()
-                    row_ids.append(int(row[0]))
+                    row_ids = self._write_passages(
+                        document.doc_id,
+                        plans[position],
+                        drop_vectors=vec_table and self.vec_ready and vectors is None,
+                    )
                     self.conn.execute(
                         "DELETE FROM fts WHERE doc_id = ?", (document.doc_id,)
                     )
@@ -853,9 +884,8 @@ class Index:
                         "INSERT INTO fts (doc_id, title, body) VALUES (?, ?, ?)",
                         (document.doc_id, document.title, document.body),
                     )
-
-                if vectors is not None:
-                    self._store_vectors(row_ids, vectors)
+                    if vectors is not None:
+                        self._store_vectors(row_ids, vectors[position])
 
                 self.conn.commit()
             except BaseException:
@@ -974,6 +1004,107 @@ class Index:
             )
             removed += cursor.rowcount
         return removed
+
+    def _write_passages(self, doc_id: str, passages: list[str], *, drop_vectors: bool) -> list[int]:
+        """Make ``doc_id``'s chunks exactly ``passages`` (seq 0..n-1); returns row_ids.
+
+        Existing rows keep their row_id (seq 0 of a short note never moves);
+        rows past the new end are deleted together with their vectors.
+        ``drop_vectors`` also deletes the vectors of the kept rows (used when
+        no new vectors will be stored for them). Caller owns the transaction.
+        """
+        count = len(passages)
+        stale = [
+            int(row[0])
+            for row in self.conn.execute(
+                "SELECT row_id FROM chunks WHERE doc_id = ? AND seq >= ?", (doc_id, count)
+            )
+        ]
+        if stale and self._vec_table_exists() and self.vec_ready:
+            for row_id in stale:
+                self.conn.execute("DELETE FROM vec_float WHERE rowid = ?", (row_id,))
+        if stale:
+            self.conn.execute("DELETE FROM chunks WHERE doc_id = ? AND seq >= ?", (doc_id, count))
+        row_ids: list[int] = []
+        for seq, text in enumerate(passages):
+            row = self.conn.execute(
+                """
+                INSERT INTO chunks (doc_id, seq, text) VALUES (?, ?, ?)
+                ON CONFLICT(doc_id, seq) DO UPDATE SET text = excluded.text
+                RETURNING row_id
+                """,
+                (doc_id, seq, text),
+            ).fetchone()
+            row_ids.append(int(row[0]))
+        if drop_vectors:
+            for row_id in row_ids:
+                self.conn.execute("DELETE FROM vec_float WHERE rowid = ?", (row_id,))
+        return row_ids
+
+    def _reusable_vectors(self, doc_ids: list[str]) -> dict[str, Any]:
+        """embed text -> stored vector for the current passages of ``doc_ids``.
+
+        A vector is a pure function of its embed text (title + passage) under
+        the bound model, so an edited long note re-embeds only the passages
+        that changed. Read-only; safe to call with no transaction open.
+        """
+        if not doc_ids or not self._vec_table_exists() or not self.vec_ready:
+            return {}
+        import numpy as np
+
+        from .embed import compose_embed_text
+
+        dim = int(self.get_meta("model_dim") or 0)
+        found: dict[str, Any] = {}
+        for part in _chunked(list(dict.fromkeys(doc_ids))):
+            rows = self.conn.execute(
+                f"""
+                SELECT c.row_id, c.text, d.title
+                FROM chunks c JOIN documents d ON d.doc_id = c.doc_id
+                WHERE c.doc_id IN ({_placeholders(part)})
+                """,  # noqa: S608 - placeholders only
+                part,
+            ).fetchall()
+            for row in rows:
+                blob = self.conn.execute(
+                    "SELECT embedding FROM vec_float WHERE rowid = ?", (int(row["row_id"]),)
+                ).fetchone()
+                if blob is None or not dim or len(blob[0]) != dim * 4:
+                    continue
+                text = compose_embed_text(str(row["title"] or ""), str(row["text"] or ""))
+                found.setdefault(text, np.frombuffer(blob[0], dtype="<f4").copy())
+        return found
+
+    def _passage_vectors(self, items: list[tuple[str, str, list[str]]]) -> list[list[Any]]:
+        """Vectors for ``[(doc_id, title, passages)]``, aligned with the passages.
+
+        Each passage is embedded as ``title + "\\n" + passage``; a one-passage
+        note therefore gets exactly the whole-note text it always had. Vectors
+        of unchanged passages of multi-passage notes are reused. Runs the
+        model with no transaction open.
+        """
+        from .embed import compose_embed_text
+
+        reuse = self._reusable_vectors(
+            [doc_id for doc_id, _title, passages in items if len(passages) > 1]
+        )
+        result: list[list[Any]] = [[None] * len(passages) for _id, _title, passages in items]
+        texts: list[str] = []
+        slots: list[tuple[int, int]] = []
+        for position, (_doc_id, title, passages) in enumerate(items):
+            for seq, passage in enumerate(passages):
+                text = compose_embed_text(title, passage)
+                cached = reuse.get(text) if len(passages) > 1 else None
+                if cached is not None:
+                    result[position][seq] = cached
+                else:
+                    texts.append(text)
+                    slots.append((position, seq))
+        if texts:
+            encoded = self._encode_vectors(texts)
+            for (position, seq), vector in zip(slots, encoded):
+                result[position][seq] = vector
+        return result
 
     def _encode_vectors(self, texts: list[str]):
         """Run the model and validate its output; touches no database state."""
@@ -1098,23 +1229,63 @@ class Index:
         return result
 
     def vectors_for_docs(self, doc_ids: list[str]) -> dict:
-        """doc_id -> float32 ndarray, for reranking a candidate pool."""
+        """doc_id -> float32 ndarray, for reranking a candidate pool.
+
+        A one-passage note maps to its vector (shape ``[dim]``, as before
+        passage chunking). A note split into passages maps to a matrix of
+        shape ``[n_passages, dim]`` whose row ``i`` is passage ``seq == i``;
+        callers score it by its best row. A note with any passage vector
+        missing is left out, so rows always line up with ``seq``.
+        """
         import numpy as np
 
         unique = list(dict.fromkeys(doc_ids))
         if not unique:
             return {}
-        placeholders = ",".join("?" * len(unique))
-        rows = self.conn.execute(
-            f"""
-            SELECT c.doc_id, v.embedding
-            FROM vec_float v
-            JOIN chunks c ON c.row_id = v.rowid
-            WHERE c.doc_id IN ({placeholders})
-            """,  # noqa: S608 - placeholders only, no user data in SQL text
-            unique,
-        ).fetchall()
-        return {doc_id: np.frombuffer(blob, dtype="<f4").copy() for doc_id, blob in rows}
+        grouped: dict[str, list[tuple[int, bytes]]] = {}
+        expected: dict[str, int] = {}
+        for part in _chunked(unique):
+            marks = _placeholders(part)
+            for doc_id, count in self.conn.execute(
+                f"SELECT doc_id, COUNT(*) FROM chunks WHERE doc_id IN ({marks}) GROUP BY doc_id",  # noqa: S608
+                part,
+            ):
+                expected[str(doc_id)] = int(count)
+            # CROSS JOIN keeps chunks as the outer loop (vec0 rowid point lookups).
+            rows = self.conn.execute(
+                f"""
+                SELECT c.doc_id, c.seq, v.embedding
+                FROM chunks c
+                CROSS JOIN vec_float v
+                WHERE v.rowid = c.row_id AND c.doc_id IN ({marks})
+                ORDER BY c.doc_id, c.seq
+                """,  # noqa: S608 - placeholders only, no user data in SQL text
+                part,
+            ).fetchall()
+            for doc_id, seq, blob in rows:
+                grouped.setdefault(str(doc_id), []).append((int(seq), blob))
+        result: dict[str, Any] = {}
+        for doc_id, items in grouped.items():
+            if len(items) != expected.get(doc_id) or [seq for seq, _ in items] != list(
+                range(len(items))
+            ):
+                continue
+            vectors = [np.frombuffer(blob, dtype="<f4").copy() for _seq, blob in items]
+            result[doc_id] = vectors[0] if len(vectors) == 1 else np.stack(vectors)
+        return result
+
+    def passage_info(self, doc_ids: list[str]) -> dict[str, int]:
+        """doc_id -> number of stored passages (chunks) for each known note."""
+        unique = list(dict.fromkeys(str(doc_id) for doc_id in doc_ids))
+        counts: dict[str, int] = {}
+        for part in _chunked(unique):
+            for doc_id, count in self.conn.execute(
+                f"SELECT doc_id, COUNT(*) FROM chunks WHERE doc_id IN ({_placeholders(part)}) "  # noqa: S608
+                "GROUP BY doc_id",
+                part,
+            ):
+                counts[str(doc_id)] = int(count)
+        return counts
 
     def get_documents(self, doc_ids: list[str]) -> dict[str, dict[str, Any]]:
         """Fetch display metadata and bodies for a bounded result set."""
@@ -1170,6 +1341,10 @@ class Index:
                 f"({_placeholders(list(_IDENTITY_META_KEYS))})",  # noqa: S608
                 _IDENTITY_META_KEYS,
             )
+            # The passage setting is kept; an empty collection follows it.
+            current = self.get_meta(META_CHUNKING)
+            if current is not None:
+                self._write_meta(META_CHUNKING_BUILT, current)
             self._invalidate_vector_cache()
             self.conn.commit()
         except Exception:
@@ -1177,6 +1352,390 @@ class Index:
             raise
         # The model binding is gone; the next index run attaches a model again.
         self.embedder = None
+
+    # -- passage chunking (docs/11 section 9) ----------------------------------
+
+    def chunking_config(self) -> dict | None:
+        """The passage setting new and changed notes are written with.
+
+        ``{"version": 1, "max_words": int, "overlap_words": int}`` or None
+        (off: one whole-note passage per document, as before v1.2.1). New
+        collections default to :data:`onefind.chunking.DEFAULT_CHUNKING`;
+        collections created before passage chunking existed keep None.
+        """
+        return chunking_from_meta(self.get_meta(META_CHUNKING))
+
+    def _chunking_metas(self) -> tuple[dict | None, str, str]:
+        """(setting, its meta text, meta text of the setting stored notes follow)."""
+        config = self.chunking_config()
+        raw_built = self.get_meta(META_CHUNKING_BUILT)
+        if raw_built == CHUNKING_MIXED:
+            built = CHUNKING_MIXED
+        else:
+            built = chunking_to_meta(chunking_from_meta(raw_built))
+        return config, chunking_to_meta(config), built
+
+    def set_chunking(self, config: Any) -> dict | None:
+        """Change the passage setting; returns the normalized setting.
+
+        ``config``: None/``"off"`` (whole notes), ``"default"``/True, or a
+        dict such as ``{"max_words": 200, "overlap_words": 40}`` (validated
+        by :func:`onefind.chunking.normalize_chunking`; raises UsageError).
+        Notes already stored keep their passages and vectors until
+        :meth:`rebuild_vectors` runs; :meth:`vectors_need_rebuild` reports
+        that (it stays False when no stored note is affected, e.g. an empty
+        collection or one with only short notes).
+        """
+        new = normalize_chunking(config)
+        new_meta = chunking_to_meta(new)
+        if self.conn.in_transaction:
+            self.conn.commit()
+        try:
+            self.conn.execute("BEGIN IMMEDIATE")
+            _config, current, built = self._chunking_metas()
+            stored = self.get_meta(META_CHUNKING)
+            if new_meta == current:
+                if stored is None:
+                    self._write_meta(META_CHUNKING, new_meta)
+                self.conn.commit()
+                return new
+            has_documents = (
+                self.conn.execute("SELECT 1 FROM documents LIMIT 1").fetchone() is not None
+            )
+            if not has_documents:
+                next_built = new_meta
+            elif built == current:
+                next_built = built
+            else:
+                next_built = CHUNKING_MIXED
+            self._write_meta(META_CHUNKING, new_meta)
+            if next_built != new_meta and not self._rechunk_candidates([new]):
+                # Every stored note already looks the same under the new
+                # setting (e.g. only short notes): nothing to rebuild.
+                next_built = new_meta
+            self._write_meta(META_CHUNKING_BUILT, next_built)
+            self.conn.commit()
+        except BaseException:
+            self.conn.rollback()
+            raise
+        finally:
+            self._invalidate_vector_cache()
+        return new
+
+    def _accepted_chunkings(self) -> list[dict | None]:
+        """Passage settings a stored note may legitimately follow right now.
+
+        The current setting, plus the one stored notes follow while a rebuild
+        is pending; when that is unknown ("mixed") whole notes and the
+        default setting are accepted too.
+        """
+        config, _current, built = self._chunking_metas()
+        options: list[dict | None] = [config]
+        if built == CHUNKING_MIXED:
+            options += [None, dict(DEFAULT_CHUNKING)]
+        else:
+            options.append(chunking_from_meta(built))
+        unique: dict[str, dict | None] = {}
+        for option in options:
+            unique.setdefault(chunking_to_meta(option), option)
+        return list(unique.values())
+
+    def _rechunk_candidates(self, configs: list[dict | None]) -> list[str]:
+        """doc_ids (sorted) whose stored passages match none of ``configs``.
+
+        A note matches a setting when its chunks are exactly
+        ``split_passages(body, setting)`` in seq order. Short notes and
+        whole-note passages are checked in SQL/word counts without
+        splitting. Runs in one read snapshot.
+        """
+        conn = self.conn
+        owned = not conn.in_transaction
+        if owned:
+            conn.execute("BEGIN")
+        try:
+            result: list[str] = []
+            cursor = conn.execute(
+                """
+                SELECT d.doc_id, d.body,
+                       (SELECT COUNT(*) FROM chunks c WHERE c.doc_id = d.doc_id) AS n,
+                       EXISTS(SELECT 1 FROM chunks c
+                              WHERE c.doc_id = d.doc_id AND c.seq = 0 AND c.text = d.body)
+                           AS whole
+                FROM documents d
+                ORDER BY d.doc_id
+                """
+            )
+            for row in cursor:
+                doc_id = str(row["doc_id"])
+                body = str(row["body"] or "")
+                count = int(row["n"])
+                whole = count == 1 and bool(row["whole"])
+                words: int | None = None
+                stored: list[str] | None = None
+                matched = False
+                for config in configs:
+                    if config is None:
+                        matched = whole
+                    else:
+                        if words is None:
+                            words = count_words(body)
+                        if words <= config["max_words"]:
+                            matched = whole
+                        elif count >= 2:
+                            expected = split_passages(body, config)
+                            if len(expected) == count:
+                                if stored is None:
+                                    stored = [
+                                        str(item[0])
+                                        for item in conn.execute(
+                                            "SELECT text FROM chunks WHERE doc_id = ? ORDER BY seq",
+                                            (doc_id,),
+                                        )
+                                    ]
+                                matched = stored == expected
+                    if matched:
+                        break
+                if not matched:
+                    result.append(doc_id)
+            return result
+        finally:
+            if owned and conn.in_transaction:
+                conn.commit()
+
+    def _passage_census(self) -> dict:
+        """Cached passage facts for stats(): setting, long notes, pending notes.
+
+        Cached per database version (other connections' commits) and this
+        connection's own change count, so polling stats stays cheap.
+        """
+        version = int(self.conn.execute("PRAGMA data_version").fetchone()[0])
+        key = (version, self.conn.total_changes)
+        if self._census_cache is not None and self._census_cache[0] == key:
+            return self._census_cache[1]
+        config, current, built = self._chunking_metas()
+        limit = int((config or DEFAULT_CHUNKING)["max_words"])
+        if config is not None and built == current:
+            long_notes = int(
+                self.conn.execute(
+                    "SELECT COUNT(*) FROM (SELECT doc_id FROM chunks GROUP BY doc_id "
+                    "HAVING COUNT(*) > 1)"
+                ).fetchone()[0]
+            )
+        else:
+            # Whitespace runs approximate the word count in SQL (no body is
+            # loaded into Python): enough for a "would be split" hint.
+            long_notes = int(
+                self.conn.execute(
+                    """
+                    SELECT COUNT(*) FROM documents
+                    WHERE length(body) > ?
+                      AND length(body) - length(replace(replace(replace(replace(
+                          body, ' ', ''), char(10), ''), char(9), ''), char(13), '')) >= ?
+                    """,
+                    (limit, limit),
+                ).fetchone()[0]
+            )
+        pending = self._rechunk_candidates([config]) if built != current else []
+        census = {
+            "chunking": config,
+            "current": current,
+            "built": built,
+            "long_notes": long_notes,
+            "pending": pending,
+        }
+        self._census_cache = (key, census)
+        return census
+
+    def vectors_need_rebuild(self) -> dict:
+        """Whether stored passages/vectors still follow an older passage setting.
+
+        Returns ``{"needed": bool, "documents": int, "reason": str,
+        "chunking": setting | None, "long_notes": int, "recommended": bool}``.
+        ``documents`` is how many notes :meth:`rebuild_vectors` will
+        re-split (and re-embed when the collection has vectors).
+        ``recommended`` is True when passage search is off but some notes are
+        longer than one passage (only a hint; evaluation indexes never get
+        it). ``reason`` is one plain sentence ("" when there is nothing to say).
+        """
+        census = self._passage_census()
+        config = census["chunking"]
+        pending = census["pending"]
+        count = len(pending)
+        long_notes = int(census["long_notes"])
+        result = {
+            "needed": bool(pending),
+            "documents": count,
+            "reason": "",
+            "chunking": config,
+            "long_notes": long_notes,
+            "recommended": False,
+        }
+        notes = _plural(count, "note")
+        if pending:
+            if config is None:
+                result["reason"] = (
+                    f"Passage search was turned off; {notes} still "
+                    f"{'has' if count == 1 else 'have'} passage vectors and need one "
+                    "vector per note again."
+                )
+            elif census["built"] == chunking_to_meta(None):
+                result["reason"] = (
+                    f"{notes} {'is' if count == 1 else 'are'} longer than one passage but "
+                    f"still {'has' if count == 1 else 'have'} a single whole-note vector, so "
+                    "meaning search only sees the beginning. Rebuild vectors to split "
+                    "them into passages."
+                )
+            else:
+                result["reason"] = (
+                    f"The passage settings changed; {notes} need new passages."
+                )
+        elif config is None and long_notes and self.get_meta("eval_manifest") is None:
+            result["recommended"] = True
+            result["reason"] = (
+                f"{_plural(long_notes, 'note')} {'is' if long_notes == 1 else 'are'} longer "
+                f"than {DEFAULT_CHUNKING['max_words']} words; meaning search only reads the "
+                "beginning of each. Turn on passage search and rebuild vectors to cover "
+                "them in full."
+            )
+        return result
+
+    def rebuild_vectors(
+        self,
+        *,
+        progress: ProgressCallback | None = None,
+        cancel: Callable[[], bool] | None = None,
+    ) -> dict:
+        """Re-split notes under the current passage setting and re-embed them.
+
+        Only notes whose stored passages differ from the current setting are
+        rewritten; each committed batch replaces a note's passages and
+        vectors together, so an interrupted rebuild (``cancel()`` returning
+        True raises :class:`OperationCancelled` between batches, or a crash)
+        leaves every note either fully old or fully new, and running it
+        again continues where it stopped. Requires the embedding model to be
+        attached when the collection has vectors (UsageError otherwise).
+
+        ``progress(event)`` gets ``{"phase": "scan" | "embed" | "write" |
+        "done", "done": int, "total": int, "message": str}`` (``embed`` when
+        vectors are computed; ``done`` counts notes). Returns ``{"documents": checked, "rebuilt": n,
+        "passages": written, "vectors_embedded": n, "skipped": n,
+        "chunking": setting, "complete": True}``.
+        """
+        if self.has_vectors():
+            if not self.vec_ready:
+                raise EnvError(
+                    "sqlite-vec unavailable in this interpreter, so vectors cannot be "
+                    "rebuilt - run 'OneFind check' for the fix"
+                )
+            if self.embedder is None:
+                raise UsageError(
+                    "rebuilding vectors needs the embedding model; attach it first "
+                    "(the collection's model is "
+                    f"'{self.get_meta('model_name')}')"
+                )
+        if self.conn.in_transaction:
+            self.conn.commit()
+        config = self.chunking_config()
+        config_meta = chunking_to_meta(config)
+
+        def _emit(phase: str, done: int, total: int, message: str) -> None:
+            if progress is not None:
+                progress({"phase": phase, "done": done, "total": total, "message": message})
+
+        documents = self.count("documents")
+        candidates = self._rechunk_candidates([config])
+        total = len(candidates)
+        _emit("scan", total, total, f"{_plural(total, 'note')} need new passages")
+        rebuilt = written = embedded = skipped = 0
+        phase = "embed" if self.embedder is not None else "write"
+        try:
+            for part in _chunked(candidates, REBUILD_BATCH_DOCS):
+                if cancel is not None and cancel():
+                    raise OperationCancelled(
+                        "rebuilding vectors was cancelled; notes finished so far keep "
+                        "their new passages"
+                    )
+                rows = self.conn.execute(
+                    f"SELECT doc_id, title, body FROM documents "
+                    f"WHERE doc_id IN ({_placeholders(part)}) ORDER BY doc_id",  # noqa: S608
+                    part,
+                ).fetchall()
+                plans = [
+                    (
+                        str(row["doc_id"]),
+                        str(row["title"] or ""),
+                        str(row["body"] or ""),
+                        split_passages(str(row["body"] or ""), config),
+                    )
+                    for row in rows
+                ]
+                vectors = None
+                if self.embedder is not None:
+                    vectors = self._passage_vectors(
+                        [(doc_id, title, passages) for doc_id, title, _body, passages in plans]
+                    )
+                vec_table = self._vec_table_exists()
+                try:
+                    self.conn.execute("BEGIN IMMEDIATE")
+                    for position, (doc_id, title, body, passages) in enumerate(plans):
+                        current = self.conn.execute(
+                            "SELECT title, body FROM documents WHERE doc_id = ?", (doc_id,)
+                        ).fetchone()
+                        if current is None or (
+                            str(current["title"] or ""), str(current["body"] or "")
+                        ) != (title, body):
+                            # Removed or rewritten by another writer meanwhile;
+                            # that write already used the current setting.
+                            skipped += 1
+                            continue
+                        row_ids = self._write_passages(
+                            doc_id,
+                            passages,
+                            drop_vectors=vec_table and self.vec_ready and vectors is None,
+                        )
+                        if vectors is not None:
+                            self._store_vectors(row_ids, vectors[position])
+                            embedded += len(row_ids)
+                        rebuilt += 1
+                        written += len(row_ids)
+                    self.conn.commit()
+                except BaseException:
+                    self.conn.rollback()
+                    raise
+                finally:
+                    self._invalidate_vector_cache()
+                _emit(
+                    phase,
+                    min(total, rebuilt + skipped),
+                    total,
+                    f"Rebuilt passages for {_plural(rebuilt, 'note')}",
+                )
+            if self.embedder is not None and self._vec_table_exists():
+                # Passages that had no vector at all (e.g. a cancelled backfill).
+                embedded += self._embed_missing_vectors(cancel=cancel, commit_batches=True)
+            try:
+                self.conn.execute("BEGIN IMMEDIATE")
+                _now, current_meta, _built = self._chunking_metas()
+                # Mark the collection rebuilt only if the setting did not change
+                # meanwhile and no note was (re)written under an older one.
+                if current_meta == config_meta and not self._rechunk_candidates([config]):
+                    self._write_meta(META_CHUNKING_BUILT, config_meta)
+                self.conn.commit()
+            except BaseException:
+                self.conn.rollback()
+                raise
+        finally:
+            self._invalidate_vector_cache()
+        _emit("done", total, total, f"Rebuilt passages for {_plural(rebuilt, 'note')}")
+        return {
+            "documents": documents,
+            "rebuilt": rebuilt,
+            "passages": written,
+            "vectors_embedded": embedded,
+            "skipped": skipped,
+            "chunking": config,
+            "complete": True,
+        }
 
     # -- reads ---------------------------------------------------------------
 
@@ -1199,33 +1758,70 @@ class Index:
         return self.get_meta("model_name") is not None
 
     def health(self) -> dict:
-        """Return count-level consistency checks for documents and vectors."""
-        chunks = self.count("chunks")
+        """Return count-level consistency checks for documents and vectors.
+
+        The original keys count **notes** (documents), so callers that compare
+        ``documents == chunks == fts`` keep working when long notes are split
+        into several passages: ``chunks`` is the number of notes that have
+        search passages, ``vectors`` the number of notes with at least one
+        vector and ``missing_vectors`` the notes with a passage that has no
+        vector. Row-level counts are in ``passages``, ``passage_vectors`` and
+        ``missing_passage_vectors``; ``orphan_vectors`` stays a row count.
+        ``ok`` requires: every note has >= 1 passage, no passage without a
+        note, one FTS row per note, and (with vectors) a vector for every
+        passage and none without a passage.
+        """
+        documents = self.count("documents")
+        passages, noted = self.conn.execute(
+            "SELECT COUNT(*), COUNT(DISTINCT doc_id) FROM chunks"
+        ).fetchone()
+        passages, noted = int(passages or 0), int(noted or 0)
+        orphan_passages = int(
+            self.conn.execute(
+                "SELECT COUNT(*) FROM chunks WHERE doc_id NOT IN (SELECT doc_id FROM documents)"
+            ).fetchone()[0]
+        )
+        without_passages = int(
+            self.conn.execute(
+                "SELECT COUNT(*) FROM documents d "
+                "WHERE NOT EXISTS (SELECT 1 FROM chunks c WHERE c.doc_id = d.doc_id)"
+            ).fetchone()[0]
+        )
+        fts = self.count("fts")
         report = {
-            "documents": self.count("documents"),
-            "chunks": chunks,
-            "fts": self.count("fts"),
+            "documents": documents,
+            "chunks": noted,
+            "fts": fts,
             "vectors": None,
             "missing_vectors": 0,
             "orphan_vectors": 0,
-            "ok": self.count("documents") == chunks == self.count("fts"),
+            "ok": documents == noted == fts and not orphan_passages and not without_passages,
+            "passages": passages,
+            "documents_without_passages": without_passages,
+            "orphan_passages": orphan_passages,
+            "chunking": self.chunking_config(),
         }
         if self.has_vectors() and not self.vec_ready:
             # The vectors may be fine; this interpreter just cannot read them.
             # Keyword search keeps working, so this is not index damage.
             report["vectors_unavailable"] = True
         elif self.has_vectors():
-            vectors = self.count("vectors")
-            missing = int(
-                self.conn.execute(
-                    """
-                    SELECT COUNT(*)
+            vector_rows = self.count("vectors")
+            with_vectors, missing_docs, missing_rows = self.conn.execute(
+                """
+                SELECT COALESCE(SUM(missing < total), 0),
+                       COALESCE(SUM(missing > 0), 0),
+                       COALESCE(SUM(missing), 0)
+                FROM (
+                    -- NOT IN materializes the vector row ids once; a LEFT JOIN
+                    -- would probe the vec0 table row by row (~100x slower).
+                    SELECT c.doc_id, COUNT(*) AS total,
+                           SUM(c.row_id NOT IN (SELECT rowid FROM vec_float)) AS missing
                     FROM chunks c
-                    LEFT JOIN vec_float v ON v.rowid = c.row_id
-                    WHERE v.rowid IS NULL
-                    """
-                ).fetchone()[0]
-            )
+                    GROUP BY c.doc_id
+                )
+                """
+            ).fetchone()
             orphan = int(
                 self.conn.execute(
                     """
@@ -1236,11 +1832,17 @@ class Index:
                     """
                 ).fetchone()[0]
             )
+            with_vectors, missing_docs = int(with_vectors), int(missing_docs)
             report.update(
-                vectors=vectors,
-                missing_vectors=missing,
+                vectors=with_vectors,
+                missing_vectors=missing_docs,
                 orphan_vectors=orphan,
-                ok=report["ok"] and vectors == chunks and missing == 0 and orphan == 0,
+                passage_vectors=vector_rows,
+                missing_passage_vectors=int(missing_rows),
+                ok=report["ok"]
+                and with_vectors == noted
+                and missing_docs == 0
+                and orphan == 0,
             )
             long_documents = self._long_document_count()
             if long_documents is not None:
@@ -1248,11 +1850,12 @@ class Index:
         return report
 
     def _long_document_count(self) -> int | None:
-        """Approximate count of notes longer than the model's input window.
+        """Approximate count of notes the model cannot read in full.
 
-        Meaning search embeds one vector per note and the model only reads its
-        first ``model_max_tokens`` tokens, so the rest of a longer note is
-        matched by keywords only. Uses ~4 characters per token.
+        The model only reads the first ``model_max_tokens`` tokens of each
+        embedded text (title + passage), so a note with a longer passage is
+        partly matched by keywords only. With passage chunking on, long notes
+        are split and this is normally 0. Uses ~4 characters per token.
         """
         raw = self.get_meta("model_max_tokens")
         try:
@@ -1263,8 +1866,11 @@ class Index:
             return None
         return int(
             self.conn.execute(
-                "SELECT COUNT(*) FROM documents "
-                "WHERE length(COALESCE(title, '')) + length(body) > ?",
+                """
+                SELECT COUNT(DISTINCT c.doc_id)
+                FROM chunks c JOIN documents d ON d.doc_id = c.doc_id
+                WHERE length(COALESCE(d.title, '')) + length(c.text) > ?
+                """,
                 (tokens * 4,),
             ).fetchone()[0]
         )
@@ -1304,6 +1910,13 @@ class Index:
             self.conn.execute("SELECT COUNT(*) FROM collection_roots").fetchone()[0]
         )
         info["collection_name"] = self.get_meta("collection_name")
+        # Passage chunking (v1.2.1, additive): rows, setting, long notes and
+        # whether stored passages/vectors still follow an older setting.
+        census = self._passage_census()
+        info["passages"] = info["chunks"]
+        info["chunking"] = census["chunking"]
+        info["long_notes"] = census["long_notes"]
+        info["vectors_need_rebuild"] = self.vectors_need_rebuild()
         return info
 
     # -- documents & metadata -----------------------------------------------
@@ -2228,17 +2841,17 @@ class Index:
         extra_fts = _scalar(
             "SELECT COUNT(*) FROM fts WHERE doc_id NOT IN (SELECT doc_id FROM documents)"
         ) + _scalar("SELECT COUNT(*) - COUNT(DISTINCT doc_id) FROM fts")
-        missing_chunks = _scalar(
-            """
-            SELECT COUNT(*) FROM documents d
-            WHERE NOT EXISTS (SELECT 1 FROM chunks c WHERE c.doc_id = d.doc_id AND c.seq = 0)
-            """
-        )
-        stale_chunks = _scalar(
-            """
-            SELECT COUNT(*) FROM chunks c JOIN documents d ON d.doc_id = c.doc_id
-            WHERE c.seq = 0 AND c.text <> d.body
-            """
+        # Notes with no passages, or passages that match neither the current
+        # passage setting nor the one stored notes follow (a pending rebuild
+        # is not damage).
+        try:
+            out_of_date = len(self._rechunk_candidates(self._accepted_chunkings()))
+        except sqlite3.DatabaseError as exc:
+            if _is_busy(exc):
+                raise
+            out_of_date = 0
+        orphan_passages = _scalar(
+            "SELECT COUNT(*) FROM chunks WHERE doc_id NOT IN (SELECT doc_id FROM documents)"
         )
         if missing_fts:
             problems.append(
@@ -2252,10 +2865,15 @@ class Index:
                 "point to documents that are no longer in the collection."
             )
             _suggest(repair_hint)
-        if missing_chunks or stale_chunks:
+        if out_of_date:
             problems.append(
-                f"{_plural(missing_chunks + stale_chunks, 'document')} have "
-                "out-of-date search data."
+                f"{_plural(out_of_date, 'document')} have out-of-date search data."
+            )
+            _suggest(repair_hint)
+        if orphan_passages:
+            problems.append(
+                f"{_plural(orphan_passages, 'search passage')} belong to documents "
+                "that were removed."
             )
             _suggest(repair_hint)
 
@@ -2330,37 +2948,22 @@ class Index:
                 self.conn.execute(
                     f"DELETE FROM chunks WHERE row_id IN ({_placeholders(part)})", part  # noqa: S608
                 )
-            stale = [
-                int(row[0])
+            # Notes whose passages are missing or match no known passage
+            # setting are re-split under the current one; their vectors are
+            # stale too and are re-embedded below.
+            mismatched = self._rechunk_candidates(self._accepted_chunkings())
+            chunking = self.chunking_config()
+            for part in _chunked(mismatched):
                 for row in self.conn.execute(
-                    """
-                    SELECT c.row_id FROM chunks c JOIN documents d ON d.doc_id = c.doc_id
-                    WHERE c.seq = 0 AND c.text <> d.body
-                    """
-                )
-            ]
-            # Stale chunk text means its vector is stale too; re-embed below.
-            _drop_vectors(stale)
-            self.conn.execute(
-                """
-                UPDATE chunks SET text = (
-                    SELECT d.body FROM documents d WHERE d.doc_id = chunks.doc_id
-                )
-                WHERE seq = 0 AND text <> (
-                    SELECT d.body FROM documents d WHERE d.doc_id = chunks.doc_id
-                )
-                """
-            )
-            inserted = self.conn.execute(
-                """
-                INSERT INTO chunks (doc_id, seq, text)
-                SELECT d.doc_id, 0, d.body FROM documents d
-                WHERE NOT EXISTS (
-                    SELECT 1 FROM chunks c WHERE c.doc_id = d.doc_id AND c.seq = 0
-                )
-                """
-            ).rowcount
-            report["chunks_fixed"] = len(orphan_chunks) + len(stale) + max(0, inserted)
+                    f"SELECT doc_id, body FROM documents WHERE doc_id IN ({_placeholders(part)})",  # noqa: S608
+                    part,
+                ).fetchall():
+                    self._write_passages(
+                        str(row["doc_id"]),
+                        split_passages(str(row["body"] or ""), chunking),
+                        drop_vectors=vec_usable,
+                    )
+            report["chunks_fixed"] = len(orphan_chunks) + len(mismatched)
 
             self.conn.execute("DELETE FROM fts")
             report["fts_rebuilt"] = self.conn.execute(
@@ -2397,7 +3000,10 @@ class Index:
                 report["orphan_vectors_removed"] = len(orphan_vectors)
                 if self.embedder is not None:
                     report["vectors_embedded"] = self._embed_missing_vectors()
-                report["vectors_missing"] = len(self._missing_vector_rows())
+                # Notes (not passages) still without a complete set of vectors.
+                report["vectors_missing"] = len(
+                    {str(row["doc_id"]) for row in self._missing_vector_rows()}
+                )
             self.conn.commit()
         except Exception:
             self.conn.rollback()

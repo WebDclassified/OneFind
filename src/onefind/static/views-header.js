@@ -2,7 +2,7 @@
 
 import { api, itemsOf } from "./api.js";
 import { byId, el } from "./dom.js";
-import { formatInteger, truncate } from "./format.js";
+import { formatInteger, plural, truncate } from "./format.js";
 import { icon } from "./icons.js";
 import { actions, collectionStatus, on, state } from "./store.js";
 import { promptDialog, setupMenu } from "./dialogs.js";
@@ -16,6 +16,36 @@ const THEME_ICONS = { system: "monitor", light: "sun", dark: "moon" };
 let collectionMenu = null;
 let lastStatusLabel = "";
 
+/**
+ * The collection's auto-sync status in a small, UI-ready shape, or null when
+ * auto-sync is off (or the server does not report it).
+ */
+export function autoSyncInfo(stats) {
+  const sync = stats?.auto_sync;
+  if (!sync || typeof sync !== "object" || !sync.enabled) return null;
+  const pending = sync.pending && typeof sync.pending === "object" ? sync.pending : {};
+  const count = ["new", "changed", "deleted"].reduce((sum, key) => sum + (Number(pending[key]) || 0), 0);
+  const state = ["idle", "scanning", "syncing", "paused", "error"].includes(sync.state) ? sync.state : "idle";
+  return { state, count, message: typeof sync.message === "string" ? sync.message : "", busy: state === "syncing" || (state === "scanning" && count > 0) };
+}
+
+/** Pill label/tone for a ready collection while auto-sync is on (null: leave the pill alone). */
+export function autoSyncPill(info) {
+  if (!info) return null;
+  if (info.busy) {
+    return {
+      label: info.count ? `Syncing ${plural(info.count, "change")}…` : "Syncing…",
+      tone: "busy",
+      detail: "Auto-sync is updating the index with changes in your folders. Search keeps working.",
+      sync: "",
+      quiet: true,
+    };
+  }
+  if (info.state === "error") return { sync: "Auto-sync problem", tone: "warn", detail: info.message || "Auto-sync hit a problem and will try again." };
+  if (info.state === "paused") return { sync: "Auto-sync paused", detail: info.message || "Auto-sync is paused." };
+  return { sync: "Auto-sync on" };
+}
+
 /** Pill label, tone and sentence for the current stats (and running job). */
 export function describeStatus(stats, job = stats?.job) {
   const status = collectionStatus(stats);
@@ -25,11 +55,15 @@ export function describeStatus(stats, job = stats?.job) {
   if (status === "offline") return { label: "Offline", tone: "danger", detail: "OneFind's local service is not responding." };
   if (status === "indexing" || running) {
     const percent = jobPercent(job);
+    const rebuilding = job?.kind === "rebuild_vectors";
+    const doing = rebuilding ? "Rebuilding" : "Indexing";
     return {
       // "100%" while the job is still saving reads as stuck; leave the number off then.
-      label: percent === null || percent >= 100 ? "Indexing" : `Indexing ${percent}%`,
+      label: percent === null || percent >= 100 ? doing : `${doing} ${percent}%`,
       tone: "busy",
-      detail: detail || "Indexing is in progress. Search keeps working with what is already indexed.",
+      detail: detail || (rebuilding
+        ? "Rebuilding vectors for long notes. Search keeps working while it runs."
+        : "Indexing is in progress. Search keeps working with what is already indexed."),
     };
   }
   if (status === "needs_attention") {
@@ -38,13 +72,21 @@ export function describeStatus(stats, job = stats?.job) {
   if (status === "no_index") return { label: "No index", tone: "muted", detail: detail || "No index is ready yet. Index a folder to start." };
   if (status === "empty") return { label: "No index", tone: "muted", detail: detail || "This collection is empty. Index a folder to add documents." };
   const missing = Number(stats?.vectors_missing) || 0;
-  if (missing > 0 && Number(stats?.vectors) > 0) {
-    return { label: "Vectors missing", tone: "warn", detail: detail || `${formatInteger(missing)} documents have no vectors yet, so meaning search may miss them.` };
-  }
+  const base = missing > 0 && Number(stats?.vectors) > 0
+    ? { label: "Vectors missing", tone: "warn", detail: detail || `${formatInteger(missing)} documents have no vectors yet, so meaning search may miss them.` }
+    : {
+      label: "Ready",
+      tone: "ok",
+      detail: detail || (Number(stats?.vectors) > 0 ? "Ready. Search by keyword or meaning." : "Ready for keyword search."),
+    };
+  const sync = autoSyncPill(autoSyncInfo(stats));
+  if (!sync) return base;
+  if (sync.label) return sync;
   return {
-    label: "Ready",
-    tone: "ok",
-    detail: detail || (Number(stats?.vectors) > 0 ? "Ready. Search by keyword or meaning." : "Ready for keyword search."),
+    ...base,
+    tone: base.tone === "ok" && sync.tone ? sync.tone : base.tone,
+    detail: sync.detail ? `${base.detail} ${sync.detail}` : `${base.detail} Auto-sync keeps the index up to date.`,
+    sync: sync.sync,
   };
 }
 
@@ -53,15 +95,26 @@ export function renderStatus(job) {
   const pill = byId("status-pill");
   pill.dataset.tone = info.tone;
   byId("status-label").textContent = info.label;
+  const syncNote = byId("status-sync");
+  syncNote.textContent = info.sync ? `· ${info.sync}` : "";
+  syncNote.hidden = !info.sync;
   byId("status-detail").textContent = info.detail;
   pill.title = info.detail;
-  // The name starts with the visible label (WCAG 2.5.3) and says what a click does.
-  const opens = info.tone === "busy" ? "show progress" : info.label === "Offline" ? "check again" : "show health";
-  pill.setAttribute("aria-label", `${info.label}. Status: ${opens}`);
-  // Announce meaningful changes, not every percentage tick.
-  const coarse = info.label.replace(/\d+%/, "");
-  if (lastStatusLabel && coarse !== lastStatusLabel) announce(`Status: ${info.label}. ${info.detail}`);
-  lastStatusLabel = coarse;
+  // The name starts with the visible text (WCAG 2.5.3) and says what a click does.
+  const opens = info.tone === "busy" && !info.quiet ? "show progress" : info.label === "Offline" ? "check again" : "show health";
+  const visibleText = info.sync ? `${info.label} · ${info.sync}` : info.label;
+  pill.setAttribute("aria-label", `${visibleText}. Status: ${opens}`);
+  // Announce meaningful changes, not every percentage tick, and never the
+  // background upkeep of auto-sync (it would interrupt on every saved note).
+  if (!info.quiet) {
+    const coarse = info.label.replace(/\d+%/, "");
+    if (lastStatusLabel && coarse !== lastStatusLabel) announce(`Status: ${info.label}. ${info.detail}`);
+    lastStatusLabel = coarse;
+  }
+  renderCollectionName();
+}
+
+function renderCollectionName() {
   const name = state.stats?.collection?.name;
   byId("collection-name").textContent = name ? truncate(name, 32) : state.stats?.offline ? "Not connected" : "No collection";
 }

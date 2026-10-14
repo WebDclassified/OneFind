@@ -4,6 +4,88 @@ All notable changes to OneFind are recorded here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and the project uses
 [Semantic Versioning](https://semver.org/).
 
+## [1.2.1] - 2026-10-14
+
+### Added
+
+- **Auto-sync** (`watcher.py`, no new dependency): OneFind can keep a collection's index up to
+  date while you edit your notes. A gentle stat-only poll (default every 5 s, slower for large
+  trees, at most about 2.5% of one core) honours exclude patterns. Changes are debounced until a
+  folder is stable for two polls, confirmed with `scan_changes`, and applied by a normal
+  incremental, pruning background job labelled "Auto-sync". It vectorizes only when the collection
+  already has vectors. Network folders are never polled, and missing, unreadable or suddenly empty
+  folders keep their notes. Errors are retried with backoff, and a manual job always takes
+  priority (it pre-empts a running auto-sync job).
+- The on/off setting is stored in the collection file (`schema_meta.auto_sync`). Existing
+  collections default to off; collections created in the index wizard default to on.
+- **API:** `GET/POST /api/autosync`, an `auto_sync` status in `GET /api/stats`, and an optional
+  `auto_sync` in `POST /api/index`. `create_app(autosync=, autosync_interval=)`.
+- **UI:** the status pill shows "Ready · Auto-sync on" or "Syncing N changes…", Manage → Health
+  has an Auto-sync switch with the last-synced time, and the index wizard has a "Keep this
+  collection up to date automatically" box. Finished syncs refresh results quietly.
+- **CLI:** `onefind watch [--interval S] [--duration S] [--allow-network]` runs auto-sync in the
+  foreground until Ctrl+C. `onefind watch --set on|off` saves the setting. `onefind serve` honours
+  it (`--no-auto-sync` disables it), and `onefind status` shows it.
+- `tools/ui_check.py` has an auto-sync step: enable it in Manage, write a note, and wait for it to
+  become searchable.
+- **Passage chunking** (`chunking.py`, no new dependency): meaning search now covers long notes.
+  The model reads only about 200 words per text, so a note longer than one passage (200 words,
+  40 words of overlap, cut at sentence/line boundaries) is split into passages, each with its own
+  vector of `title + passage`, and a note ranks by its best passage. Keyword search is unchanged.
+  New collections have it on; existing collections keep one vector per note until
+  `Index.set_chunking("default")` + `Index.rebuild_vectors()` (or the new
+  `JobManager.start_rebuild_vectors` background job) re-split them, batch by batch and
+  cancellable. `stats()` reports `chunking`, `passages`, `long_notes` and `vectors_need_rebuild`;
+  explanations add `best_passage_seq` ("Closest passage is further down the note"), and snippets
+  of meaning matches show the matching passage instead of the note's first lines. On the
+  showcase corpus hybrid hit@1/MRR rose from 0.948/0.968 to 0.964/0.977 (hit@3 unchanged at
+  0.990); sample-data is unchanged. BEIR evaluation always uses whole documents.
+- **Rebuild vectors in the app:** `POST /api/maintenance/rebuild-vectors {"chunking":
+  "keep"|"default"|"off"}` starts a background job (`kind: "rebuild_vectors"`, CSRF header,
+  409 `collection_busy` while another job runs, pre-empts auto-sync like other manual work).
+  Manage → Health shows a gentle "Improve meaning search for long notes" offer for collections
+  made before 1.2.1 ("Split long notes" turns passage search on) and a "Rebuild vectors" action
+  when stored vectors follow an older passage setting (also in Maintenance). The job runs in the
+  usual progress dialog with its own steps (Find long notes → Split long notes → Build vectors →
+  Ready) and can be cancelled; finished notes keep their new passages.
+- **Passage-aware results:** search results carry `passage` (`{seq, count, text}`) for meaning
+  matches in long notes. The preview marks the matched passage ("Closest passage · 5 of 5"),
+  scrolls to it, and no longer jumps to an unrelated highlight elsewhere in the note; "Why this
+  result" says when the closest passage is further down the note.
+- **`/api/stats`** passes through `chunking`, `passages` and `vectors_need_rebuild`; the status
+  sentence says when vectors need a rebuild, and the pill reads "Rebuilding 40%" during one.
+- **CLI:** `onefind rebuild-vectors [--db|--collection] [--chunking keep|default|off] [-q]` with
+  live progress and the same Ctrl+C semantics as `index` (first Ctrl+C stops between batches,
+  exit 130; a rerun continues). `onefind status` prints a `passages` line and `status`/`doctor`
+  say when a rebuild is needed or recommended, with the exact command (`status --json` adds
+  `chunking`, `long_notes`, `vectors_need_rebuild`).
+- **CLI folder management:** `onefind folders list [--json]` (ids, note counts, saved
+  exclusions, missing folders), `onefind folders remove FOLDER [--keep-documents |
+  --delete-documents]` and `onefind folders relocate OLD NEW` (notes keep their ids), mirroring
+  `POST /api/roots/remove` and `/api/roots/relocate`. FOLDER is a path or the `[id]` from `list`.
+- `GET /api/roots`: the collection's folders with their saved exclude patterns (no disk access).
+  The index wizard pre-fills an already indexed folder's saved patterns ("Options · 1 saved
+  exclusion"); leaving them untouched keeps them, editing replaces them.
+- `POST /api/index` accepts an optional `collection`; when it is not the open collection the
+  request is refused with 409 `collection_changed`. The wizard and the queued "Update index" of
+  several folders send it, so a queued update never lands in a collection switched to since.
+- `tools/ui_check.py` covers the long-notes offer, both rebuild flows, the passage preview and the
+  wizard's saved-exclusion pre-fill.
+
+### Changed
+
+- `/api/stats` `long_notes` now means **notes longer than one passage** (`Index.stats()`); the
+  old meaning (notes with text past the model's window, `health.long_documents`) moved to
+  `notes_over_model_window`. Nothing in the UI read the old key.
+- `GET /api/fs/list` marks `.jsonl` datasets `supported` (they can be indexed on their own);
+  `supported_files` still counts only the notes that indexing the folder reads. The wizard's
+  file-name workaround is gone.
+- `onefind smoke` and `evaluate.run_smoke(lexical_match="auto")` use the app's keyword matching
+  by default (`--match all|any|auto`; semantic cases always use all). A no-answer case passes
+  when nothing strong is returned (no hits, or only weak ones, which the app shows as "No strong
+  matches"). Re-baselined: sample-data 1.000 Hit@3, 1.000 MRR@5, 1.000 no-answer; showcase-data
+  0.984 Hit@3, 0.967 MRR@5, 1.000 no-answer (identical with `--match all`).
+
 ## [1.2.0] - 2026-10-14
 
 This release turns the hybrid-search reproduction into a **private, local notes search app**. The

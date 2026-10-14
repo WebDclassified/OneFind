@@ -95,11 +95,18 @@ The window is titled **Choose a folder to index**.
 2. **(Optional) Skip things.** Open **Options** → **Skip these files or folders** and type
    patterns separated by commas or new lines, for example `drafts, archive/*, *.log.md`. Hidden
    folders and `node_modules` are always skipped. OneFind remembers these patterns for the folder.
+   When you choose a folder you indexed before, its saved patterns are already filled in (the
+   heading reads **Options · 1 saved exclusion**). Leave them as they are to keep them; whatever
+   you type there replaces them, and an emptied field skips nothing extra.
 3. **Meaning search.** Keep **Build vectors for meaning search** ticked. The first time, OneFind
    loads a small language model that runs on your computer. Without vectors you still get Keyword
    search.
-4. If this creates a new collection, you can give it a **Collection name** (for example *Notes*).
-5. Click **Index "folder name"**. If you picked a very large folder such as your whole home folder,
+4. **Keep it up to date.** Leave **Keep this collection up to date automatically** ticked and
+   OneFind picks up new, changed and deleted notes by itself (see
+   [Auto-sync](#auto-sync-keep-the-index-up-to-date-automatically)). It is ticked for a new
+   collection; for an existing one it shows the collection's current setting.
+5. If this creates a new collection, you can give it a **Collection name** (for example *Notes*).
+6. Click **Index "folder name"**. If you picked a very large folder such as your whole home folder,
    OneFind asks **Index this whole folder?** first. Usually it's better to choose the folder that
    actually holds your notes.
 
@@ -224,6 +231,9 @@ Click **Explain** on a result (or press `e`). A **Why this result** box opens wi
   #1 (similarity 0.57).", or "… did not find it.";
 - the mode and vector precision used.
 
+For a long note found by meaning, a reason such as "Closest passage is further down the note
+(passage 5 of 5)" tells you the match is not at the top; **Preview** takes you straight there.
+
 Use it to judge whether a result is really what you're after.
 
 ---
@@ -237,6 +247,10 @@ Use it to judge whether a result is really what you're after.
 | **Show in folder** | **More → Show in folder** | Opens your file manager with the file selected. |
 | **Copy snippet** | **More → Copy snippet**, or `c` | Copies the snippet text. "Snippet copied" confirms it. |
 | **Bookmark** | **More → Bookmark**, or `b` | Keeps the note on the home screen under *Bookmarks*. |
+
+When a meaning match came from part of a long note, Preview marks that part with a tinted band
+labelled **Closest passage · 5 of 5** and scrolls to it, so you land on the answer rather than the
+top of the note.
 
 Very long notes show only their beginning in Preview: "This is a long document, so only the
 beginning is shown. Open the file to read all of it."
@@ -286,8 +300,55 @@ such as *Notes*, *Work* and *Project X*. Searching only ever looks inside the cu
 
 ## 11. Keeping the index up to date
 
-OneFind does not watch your folders constantly. When you add, edit or delete notes, update the
-index:
+### Auto-sync: keep the index up to date automatically
+
+With **auto-sync** on, you never have to think about updating. OneFind checks your folders every
+few seconds and updates the index when notes are added, changed or deleted. Everything stays on
+this computer.
+
+**Turn it on or off:** **Manage → Health → Auto-sync**. New collections made with the index
+wizard have it on already (the **Keep this collection up to date automatically** box). Collections
+made before version 1.2.1 start with it off. The setting is saved inside the collection file, so
+it comes along when you back up or move the collection.
+
+**What you'll see:**
+
+- The status pill at the top says **Ready · Auto-sync on**. Right after you save a note it may
+  briefly say **Syncing 1 change…**, then go back to *Ready*.
+- **Manage → Health** shows when it last synced, for example "On · last synced 2 min ago (1 note
+  changed)."
+- Search results, filters and the home screen refresh quietly. If you haven't touched anything
+  for a few seconds, a small "Index updated · 2 notes changed" message appears and fades away.
+  Nothing jumps around while you are reading or typing.
+
+**Good to know:**
+
+- A note is indexed once it has stopped changing for a moment, so a note that is still being
+  saved is never indexed half-written.
+- It follows your **Skip these files or folders** patterns, and hidden folders and `node_modules`
+  are always skipped.
+- Big folders are checked less often, so your computer stays quiet.
+- Folders on **other computers** (network shares such as `\\server\notes`) are never checked
+  automatically. Update those by hand.
+- If a folder is **missing** (moved, renamed or on an unplugged drive), or **suddenly empty**,
+  auto-sync leaves its notes in the index and says so in Manage → Health. Use **Locate…** or
+  **Remove from collection** there, or **Update index** if you really emptied the folder.
+- When you start an update, a rebuild or a maintenance task yourself, it always goes first and
+  auto-sync waits.
+- A note you **removed from the index** comes back the next time something in its folder changes.
+  To keep it out, add an exclude pattern for it.
+- The status pill says **Auto-sync paused** while another indexing task runs, and
+  **Auto-sync problem** if something went wrong. Manage → Health explains the problem in plain
+  words, and auto-sync keeps retrying.
+
+**From the terminal:** `onefind serve` keeps every collection that has auto-sync on up to date
+while the app runs (`onefind serve --no-auto-sync` turns it off for that run). `onefind watch`
+does the same in a terminal window and prints a line for each change until you press Ctrl+C.
+`onefind watch --set on` (or `off`) changes a collection's setting without opening the app.
+
+### Updating by hand
+
+With auto-sync off (or whenever you like), update the index yourself:
 
 - The home screen and **Manage → Health** check your folders and tell you what changed, for
   example "3 new, 1 changed files since the last index." Click **Update index**.
@@ -301,6 +362,26 @@ index:
 
 To **leave a note out** of search for good, add an exclude pattern for it (section 3, step 2) and
 update the index.
+
+### Folders that moved or that you no longer need
+
+A collection remembers every folder you indexed into it. When one of them can't be found,
+**Manage → Health** lists it with two choices:
+
+- **Locate…** if the folder only moved (renamed, or copied to another computer): choose its new
+  place. Every note keeps its bookmarks and history and is **not** indexed a second time; the next
+  update picks up anything you edited meanwhile.
+- **Remove from collection** if it is gone for good: its notes leave search. The files on disk are
+  never touched.
+
+The same from a terminal (add `--collection NAME` to pick the collection):
+
+```bash
+onefind folders list                       # folders with [id], note counts, saved exclusions, missing ones
+onefind folders relocate OLD_PATH NEW_PATH # the folder moved; OLD can also be its [id]
+onefind folders remove FOLDER              # forget it and remove its notes from the index
+onefind folders remove FOLDER --keep-documents   # forget it but keep its notes searchable
+```
 
 ---
 
@@ -358,6 +439,24 @@ Open **Manage** (top right). Its tabs are **Health**, **Maintenance**, **Backups
 For large collections the Size row adds a note. Over 5,000 notes: "Search stays quick; full
 rebuilds and building vectors take a few minutes." Over about 50,000: OneFind suggests splitting
 into smaller collections.
+
+**Long notes.** The meaning model reads about 200 words at a time, so OneFind splits longer notes
+into overlapping passages and gives each its own vector. The **Long notes** row says how many
+notes are searched passage by passage. Collections made before version 1.2.1 keep one vector per
+note, so meaning search sees only the beginning of a long note. For those, Health shows
+**Improve meaning search for long notes — 12 notes are longer than one passage** with a **Split
+long notes** button. It rebuilds the vectors of the long notes in the background, with the usual
+progress window (**Find long notes → Split long notes → Build vectors → Ready**). Search keeps
+working meanwhile, **Cancel rebuild** stops after the current batch, and notes finished so far
+keep their new passages; run it again to finish the rest. If Health ever says **Vectors need a
+rebuild**, use **Rebuild vectors** there or in Maintenance. From a terminal:
+
+```bash
+onefind rebuild-vectors --collection Notes --chunking default   # turn passages on and rebuild
+onefind rebuild-vectors --collection Notes                      # finish a pending or cancelled rebuild
+```
+
+`onefind status` and `onefind doctor` also say when a rebuild is needed or recommended.
 
 **Maintenance:**
 
@@ -505,8 +604,13 @@ set `HF_HUB_OFFLINE=1` before starting OneFind. Out of the box, OneFind can only
 
 - It works best with up to a few thousand notes and is comfortable up to about 50,000.
 - Only text files: no PDFs, Word documents or scanned images. Files over 5 MB are skipped.
-- Meaning search looks mainly at the **beginning** of each note (roughly the first 200 words or
-  so). Keyword search covers the whole note.
+- Meaning search reads long notes passage by passage (about 200 words each), so a match deep
+  inside a long note is found and its snippet shows that part. Collections made before version
+  1.2.1 still look mainly at the **beginning** of each long note until you choose **Split long
+  notes** in Manage → Health (see [section 13](#13-health-and-maintenance)). Keyword search always
+  covers the whole note.
 - The meaning model is trained mostly on English.
-- It doesn't watch folders in real time, so use **Update index** after changes.
+- Auto-sync checks your folders every few seconds rather than reacting instantly, so a saved note
+  shows up in search a few seconds later. It skips folders on other computers, and it is off for
+  collections made before version 1.2.1 until you switch it on.
 - It is for one person on one computer. There is no sharing or sync.

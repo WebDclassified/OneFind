@@ -5,10 +5,10 @@
 
 import { api } from "./api.js";
 import { byId } from "./dom.js";
-import { folderLabel } from "./format.js";
+import { folderLabel, plural } from "./format.js";
 import { settlePage } from "./motion.js";
 import {
-  actions, canSearch, collectionStatus, emit, emptyFilters, on, state,
+  actions, autoSyncFinished, canSearch, collectionStatus, emit, emptyFilters, on, state,
 } from "./store.js";
 import { setupDialog, setupMenu } from "./dialogs.js";
 import { initTheme } from "./theme.js";
@@ -28,11 +28,15 @@ import {
 
 const POLL_IDLE_MS = 15000;
 const POLL_JOB_MS = 1500;
+const POLL_AUTOSYNC_MS = 5000; // auto-sync on: notice finished syncs promptly
+const USER_IDLE_MS = 8000; // no key or pointer input for this long = the person is not busy
 
 let statsController = null;
 let pollTimer = 0;
 let pollDelay = 0;
 let previousStatus = null;
+let lastSync = { collection: null, syncs: null };
+let lastInputAt = Date.now();
 
 /* ---------- stats ---------- */
 
@@ -62,6 +66,37 @@ function applyStats(stats) {
   if (stats.job && !["succeeded", "failed", "cancelled"].includes(stats.job.status) && !jobRunning()) {
     actions.watchJob?.(stats.job);
   }
+  noticeAutoSync(stats);
+}
+
+/* ---------- auto-sync ---------- */
+
+function userIsIdle() {
+  return Date.now() - lastInputAt > USER_IDLE_MS && document.visibilityState === "visible";
+}
+
+function noticeAutoSync(stats) {
+  const { finished, next } = autoSyncFinished(lastSync, stats);
+  lastSync = next;
+  if (finished) onAutoSynced(stats.auto_sync);
+}
+
+/** Quietly bring every view up to date after auto-sync changed the index. */
+async function onAutoSynced(sync) {
+  const idle = userIsIdle();
+  await Promise.all([loadFacets(), state.view === "idle" ? refreshIdle() : null]);
+  if (byId("manage-dialog").open) actions.refreshManage?.({ changes: true });
+  const dialogOpen = Boolean(document.querySelector("dialog[open]"));
+  // Re-run visible results only when the person is not reading or typing:
+  // cards moving under the pointer would be disruptive.
+  if (idle && state.view === "results" && hasQuery() && !state.previewDocId && !dialogOpen) {
+    actions.runSearch?.({ record: false, deferRecord: false });
+  }
+  const changes = sync?.last_changes || {};
+  const count = ["added", "updated", "removed"].reduce((sum, key) => sum + (Number(changes[key]) || 0), 0);
+  if (idle && count && !dialogOpen) {
+    toast(`Index updated · ${plural(count, "note")} changed`, { tone: "info", duration: 2500 });
+  }
 }
 
 /** Fetch /api/stats; on failure mark the app offline without losing the query. */
@@ -89,8 +124,10 @@ export async function refreshStats() {
  * search typed during the first index would not run) until the job ended.
  */
 function schedulePoll({ keepBusy = false } = {}) {
-  const busy = jobRunning() || collectionStatus() === "indexing";
-  const delay = busy ? POLL_JOB_MS : POLL_IDLE_MS;
+  const sync = state.stats?.auto_sync;
+  const syncing = Boolean(sync?.enabled) && ["scanning", "syncing"].includes(sync?.state);
+  const busy = jobRunning() || collectionStatus() === "indexing" || syncing;
+  const delay = busy ? POLL_JOB_MS : sync?.enabled ? POLL_AUTOSYNC_MS : POLL_IDLE_MS;
   if (keepBusy && pollTimer && pollDelay <= delay) return;
   window.clearTimeout(pollTimer);
   pollDelay = delay;
@@ -125,6 +162,7 @@ export function suggestQueries() {
 async function onCollectionChanged({ quiet = false } = {}) {
   // Folders queued for an update belong to the previous collection.
   resetJobQueue();
+  lastSync = { collection: null, syncs: null };
   closePreview({ restoreFocus: false });
   clearSearch({ focus: false });
   state.filters = emptyFilters();
@@ -174,6 +212,11 @@ function wireEvents() {
   on("job", (job) => {
     if (job && !["succeeded", "failed", "cancelled"].includes(job.status)) schedulePoll({ keepBusy: true });
   });
+  for (const type of ["keydown", "pointerdown", "wheel"]) {
+    document.addEventListener(type, () => {
+      lastInputAt = Date.now();
+    }, { passive: true, capture: true });
+  }
   document.addEventListener("visibilitychange", () => {
     if (document.visibilityState === "visible") refreshStats();
   });

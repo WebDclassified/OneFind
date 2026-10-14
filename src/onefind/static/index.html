@@ -45,6 +45,7 @@
         <button class="status-pill" id="status-pill" type="button" data-tone="muted" aria-describedby="status-detail">
           <span class="status-dot" aria-hidden="true"></span>
           <span id="status-label">Connecting</span>
+          <span class="status-sync" id="status-sync" hidden></span>
         </button>
         <span class="sr-only" id="status-detail">Connecting to the local search service.</span>
 
@@ -467,7 +468,7 @@
         <p class="field-error" id="fs-error" role="alert" hidden></p>
       </form>
       <details class="disclosure">
-        <summary>Options</summary>
+        <summary id="index-options-summary">Options</summary>
         <div class="field">
           <label for="index-exclude">Skip these files or folders</label>
           <textarea id="index-exclude" rows="2" spellcheck="false" placeholder="drafts, archive/*, *.log.md"
@@ -483,6 +484,14 @@
           <strong>Build vectors for meaning search</strong>
           <small id="index-embed-help">Uses the local model when it is installed. Keyword search works either
             way.</small>
+        </span>
+      </label>
+      <label class="check-field">
+        <input type="checkbox" id="index-autosync" checked>
+        <span>
+          <strong>Keep this collection up to date automatically</strong>
+          <small>OneFind checks the folder every few seconds and indexes new, changed and deleted notes. You can
+            turn this off in Manage.</small>
         </span>
       </label>
     </div>
@@ -551,6 +560,17 @@
       <section class="sheet-section" id="manage-health" aria-labelledby="manage-health-title" tabindex="-1">
         <h3 class="section-title" id="manage-health-title">Health</h3>
         <div id="manage-health-content"></div>
+        <div class="sheet-block autosync-block" id="manage-autosync">
+          <label class="check-field">
+            <input type="checkbox" id="autosync-toggle" aria-describedby="autosync-status">
+            <span>
+              <strong>Auto-sync</strong>
+              <small>OneFind checks your folders every few seconds and updates the index when notes change.
+                Everything stays on this computer.</small>
+            </span>
+          </label>
+          <p class="status-line autosync-line" id="autosync-status" aria-live="polite"></p>
+        </div>
       </section>
       <section class="sheet-section" id="manage-maintenance" aria-labelledby="manage-maintenance-title"
         tabindex="-1">
