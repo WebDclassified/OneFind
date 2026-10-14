@@ -12,6 +12,8 @@ Precision conventions (mirroring arXiv:2608.24060 configurations):
 
 from __future__ import annotations
 
+import threading
+
 import numpy as np
 
 # single source of truth for the default model lives in envcheck
@@ -21,9 +23,14 @@ __all__ = ["DEFAULT_MODEL", "SentenceEmbedder"]
 
 
 class SentenceEmbedder:
-    """Wraps sentence-transformers; emits unit-normalized float32 vectors."""
+    """Wraps sentence-transformers; emits unit-normalized float32 vectors.
+
+    Encoding is serialized by an internal lock so one cached instance can be
+    shared between a background indexing job and live searches.
+    """
 
     def __init__(self, model_name: str) -> None:
+        self._lock = threading.Lock()
         try:
             from sentence_transformers import SentenceTransformer
         except ImportError as exc:  # pragma: no cover - env-dependent
@@ -31,21 +38,33 @@ class SentenceEmbedder:
                 "sentence-transformers not installed - run: pip install -e \".[model]\""
             ) from exc
         self.name = model_name
-        self.model = SentenceTransformer(model_name, device="cpu")
+        try:
+            # A cached model loads with zero network requests: no hub latency
+            # (or rate-limit retries) and no metadata leaves the machine.
+            self.model = SentenceTransformer(model_name, device="cpu", local_files_only=True)
+        except OSError:
+            # Not cached yet (first-time setup): download it once.
+            self.model = SentenceTransformer(model_name, device="cpu")
         model_card = getattr(self.model, "model_card_data", None)
         self.revision = getattr(model_card, "commit_hash", None) or "unpinned"
         get_dim = getattr(self.model, "get_embedding_dimension", None)
         self.dimension = int(
             get_dim() if get_dim is not None else self.model.get_sentence_embedding_dimension()
         )
+        # Tokens the model reads per text; longer notes are truncated, so only
+        # their beginning is matched by meaning (reported by Index.health()).
+        max_tokens = getattr(self.model, "max_seq_length", None)
+        self.max_seq_length = int(max_tokens) if isinstance(max_tokens, int) else None
 
     def _encode(self, texts: list[str]) -> np.ndarray:
-        return self.model.encode(
-            texts,
-            batch_size=64,
-            convert_to_numpy=True,
-            normalize_embeddings=True,
-        ).astype(np.float32)
+        with self._lock:
+            encoded = self.model.encode(
+                texts,
+                batch_size=64,
+                convert_to_numpy=True,
+                normalize_embeddings=True,
+            )
+        return encoded.astype(np.float32)
 
     def encode_documents(self, texts: list[str]) -> np.ndarray:
         return self._encode(texts)

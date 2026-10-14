@@ -57,16 +57,20 @@ def test_all_advertised_subcommands_are_real():
         if isinstance(action, argparse._SubParsersAction)
     )
     assert set(subparsers.choices) == {
-        "check", "index", "search", "eval", "sweep-alpha", "smoke", "serve"
+        "check", "index", "search", "eval", "sweep-alpha", "smoke", "serve",
+        # v1.2 (docs/11-implementation-contract.md section 7)
+        "collections", "status", "backup", "restore", "doctor", "compact", "remove",
     }
 
 
 def test_real_subcommands_require_their_arguments():
-    # every subcommand takes arguments; missing args -> argparse exit 2
+    # these subcommands take arguments; missing args -> argparse exit 2
+    # (`serve` needs none since v1.2: without --db it serves the library)
     import pytest
 
     for argv in (
-        ["index"], ["search"], ["eval"], ["sweep-alpha"], ["smoke"], ["serve"]
+        ["index"], ["search"], ["eval"], ["sweep-alpha"], ["smoke"],
+        ["collections"], ["restore"], ["remove"],
     ):
         with pytest.raises(SystemExit) as excinfo:
             main(argv)

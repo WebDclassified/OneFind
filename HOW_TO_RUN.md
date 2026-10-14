@@ -1,13 +1,16 @@
-# How to Run OneFind
+# How to Run OneFind (v1.2)
 
-OneFind is free to run locally on CPU. It does not require a cloud account, paid API, GPU, or hosted vector database.
+OneFind runs locally on CPU and is free to use. It needs no cloud account, paid API, GPU or hosted
+vector database. For a non-technical walkthrough of the app, see
+[`docs/12-user-guide.md`](docs/12-user-guide.md).
 
 ## 1. Prerequisites
 
-- Python 3.11 or newer
+- Python 3.11 or newer (an official CPython build, so SQLite can load extensions)
 - Git
-- Internet only for the first model/dataset download
-- About 500 MB free disk space for the development environment and caches
+- Internet only for the first model download and for BEIR datasets
+- About 500 MB of free disk space for the environment and caches
+- Google Chrome or Chromium, only for the browser walkthrough (`tools/ui_check.py`)
 
 ## 2. Clone and create an environment
 
@@ -16,8 +19,6 @@ git clone https://github.com/WebDclassified/OneFind.git
 cd OneFind
 python -m venv .venv
 ```
-
-Activate it:
 
 ```powershell
 # Windows PowerShell
@@ -29,141 +30,297 @@ Activate it:
 source .venv/bin/activate
 ```
 
-## 3. Install OneFind
+## 3. Install
 
-For the complete local demo, evaluations, and tests:
+| You want | Install |
+|---|---|
+| The app with keyword search only | `pip install -e ".[serve]"` |
+| The app with meaning (semantic/hybrid) search | `pip install -e ".[model,serve]"` |
+| Everything: app, evaluations, tests | `pip install -e ".[model,eval,serve,dev]"` |
+| The live browser walkthrough (plus the above) | `pip install -e ".[browser]"` |
 
 ```bash
 python -m pip install --upgrade pip
 pip install -e ".[model,eval,serve,dev]"
+onefind --version        # onefind 1.2.0
 ```
 
-The command name is lowercase `onefind` on Windows, macOS, and Linux.
+The command is lowercase `onefind` on Windows, macOS and Linux. `python -m onefind.cli …` works
+too.
 
 ## 4. Verify the runtime
 
 ```bash
-onefind check
-onefind check --full
+onefind check            # SQLite FTS5 + sqlite-vec
+onefind check --full     # also downloads/loads the MiniLM model (CPU)
 ```
 
-The first command checks SQLite FTS5 and sqlite-vec. `--full` also loads the local MiniLM model. The model uses CPU by default.
-
-## 5. Build the expanded offline demo
+## 5. Run the app (library mode)
 
 ```bash
-onefind index ./sample-data --db demo.db --embed
-onefind smoke --db demo.db --queries sample-data/queries.jsonl
+onefind serve
 ```
 
-The bundle contains 20 short documents across science, health, finance, technology, nature, music, operations, and more. The gold file contains 26 queries covering lexical, semantic, hybrid, disambiguation, and no-answer cases.
+Open <http://127.0.0.1:8080/>. With no `--db`, the server runs in **library mode**. It opens the
+active collection from your per-user library, or shows the first-run welcome screen ("Index a
+folder") when there is none. Index a folder from the browser and watch the progress. Collections
+created in the app are stored under the library folder:
 
-## 6. Start the polished local UI
+| OS | Default library folder |
+|---|---|
+| Windows | `%APPDATA%\OneFind` |
+| macOS | `~/Library/Application Support/OneFind` |
+| Linux | `$XDG_DATA_HOME/onefind` or `~/.local/share/onefind` |
+
+```text
+<library>/
+  collections.json        # names, files, active collection
+  collections/<slug>.db   # one SQLite file per collection
+  backups/<slug>-YYYYmmdd-HHMMSS.db
+```
+
+Useful `serve` options:
+
+| Option | Effect |
+|---|---|
+| `--home DIR` | Use a different library folder (same as setting `ONEFIND_HOME=DIR`) |
+| `--db FILE` | Serve one database file, as in v1.1 (it is not added to your library unless `--home`/`ONEFIND_HOME` is set) |
+| `--port 8080` / `--host 127.0.0.1` | Bind address. The server is loopback-only by default |
+| `--allow-remote` | Required for a non-loopback `--host`. There is no login, so use only behind a firewall or authenticated proxy |
+| `--no-open` | Disable *Open* / *Show in folder* from the web app |
+| `--reset-token TOKEN` | Enable the legacy `POST /api/reset` |
+
+**Try it in a throwaway library** (nothing touches your real library):
+
+```powershell
+# Windows PowerShell
+$env:ONEFIND_HOME = "$env:TEMP\onefind-try"
+onefind index .\sample-data --collection Sample --embed
+onefind serve
+```
 
 ```bash
-onefind serve --db demo.db --port 8080
+# macOS / Linux
+export ONEFIND_HOME=/tmp/onefind-try
+onefind index ./sample-data --collection Sample --embed
+onefind serve
 ```
 
-Open <http://127.0.0.1:8080/>.
+Once the model is cached, OneFind loads it from the local cache without contacting the Hugging
+Face Hub; it only downloads when the model is missing. Set `HF_HUB_OFFLINE=1` as well if you want
+the Hugging Face libraries to refuse network access outright.
 
-The UI is packaged inside the Python wheel. It has no CDN, web-font, analytics, paid API, or frontend build step. It includes:
+## 6. Collections from the terminal
 
-- keyword, semantic, and hybrid modes;
-- float, int8, and binary precision controls when supported;
-- capability-aware empty and unavailable states;
-- safe rendering of untrusted document text;
-- keyboard focus shortcuts (`/` and `Ctrl/Cmd+K`);
-- responsive and dark-mode layouts;
-- result source, score metric, latency, and highlighted snippets.
+```bash
+onefind collections create Notes              # empty collection in <library>/collections/notes.db
+onefind index ~/Notes --collection Notes --embed --exclude drafts --exclude "archive/*"
+onefind collections create Work               # another one
+onefind collections use Work                  # make it active (the app and CLI fall back to it)
+onefind collections list                      # * marks the active collection; --json available
+onefind collections rename Work "Work 2026"   # the file keeps its name
+onefind collections remove "Work 2026"        # forget it; the .db file is kept
+onefind collections remove Old --delete-file --yes   # also delete the file
+```
 
-The server binds to loopback by default. A non-loopback bind is refused unless `--allow-remote` is explicitly supplied. The demo has no account system, so only use remote binding behind a trusted firewall or authenticated reverse proxy.
+`onefind index --collection NAME` creates the collection if it does not exist yet.
 
-## 7. Run the tests
+**Which collection does a command use?** `--db PATH` wins, then `--collection NAME`, then
+`./onefind.db` in the current folder. `search`, `status`, `doctor`, `compact`, `backup` and
+`remove` fall back to the library's active collection when `./onefind.db` does not exist, and
+never create an empty database. `index` without `--db`/`--collection` writes `./onefind.db`, as
+in v1.1.
+
+## 7. Index, search and keep up to date
+
+```bash
+# First index (vectors for meaning search; exclusions are remembered for this folder)
+onefind index ~/Notes --collection Notes --embed --exclude drafts
+
+# Later: incremental update. Only new/changed files are read; --prune drops deleted/excluded ones
+onefind index ~/Notes --collection Notes --prune
+
+# Re-read everything
+onefind index ~/Notes --collection Notes --full
+
+# Hybrid search (default mode) with filters and explanations
+onefind search "undo a bad deploy" --collection Notes
+onefind search "rollback owner" --mode lexical --explain
+onefind search "budget" --folder work --type txt --since 2026-01-01
+onefind search "release" --tag ops
+
+# Health, changed files per folder, last run
+onefind status                 # --no-scan skips the folder scan; --json for scripts
+
+# Remove a note from the index (the file is untouched; re-indexing adds it back unless excluded)
+onefind remove drafts/old-idea.md
+```
+
+`index` prints live progress to stderr (`-q` silences it) and a summary such as
+`changes : 3 added, 0 updated, 0 unchanged, 0 removed, 0 skipped`. Press `Ctrl+C` once to cancel
+cleanly between files or batches (exit code 130). Committed batches stay searchable.
+
+Supported files: `.md`, `.markdown`, `.txt`, `.text`, `.rst`, `.org`, plus `.jsonl` datasets.
+Files over 5 MB, binary files and empty files are skipped and reported. Hidden folders,
+`node_modules`, `__pycache__`, `.venv` and `venv` are always excluded.
+
+## 8. Backup, restore, and moving a collection
+
+```bash
+onefind backup                                 # active collection -> <library>/backups/<slug>-<timestamp>.db
+onefind backup --collection Notes --out ~/Backups            # into a folder (created if needed)
+onefind backup --collection Notes --out ~/Backups/notes.db   # to a file (--overwrite to replace)
+onefind backup --list                          # backups in the library's backups folder
+onefind restore notes-20261014-023257.db --as "Notes restored"   # a name from backups/ or a full path
+```
+
+`--out` treats a path as a folder when it is an existing folder, ends with a slash, or is a new
+path without an extension (the folder is created); the backup is then named
+`<collection>-<timestamp>.db` inside it. Any other path is the backup file name. Backups use SQLite's online backup API, so they are
+consistent even while the app is running.
+`restore` always copies the backup into a **new** collection (`collections/<slug>.db`) and never
+opens the backup in place. In the web app, **Manage → Backups → Restore… → Replace current…**
+replaces the active collection after a typed confirmation and an automatic safety backup.
+
+**Move to another computer:** copy a backup (or the `.db`, while OneFind is closed) to the new
+machine, then register it there:
+
+```bash
+onefind collections create Notes --db ~/Moved/notes-copy.db    # Windows: --db D:\Moved\notes-copy.db
+```
+
+In the app, use the collection menu → **Open existing collection file…**. Search and preview work
+immediately. *Open file* needs the original folder at the same path, or re-index from its new
+location.
+
+## 9. Maintenance
+
+```bash
+onefind doctor                 # integrity check: database file, keyword index, vectors (exit 4 if problems remain)
+onefind doctor --repair        # rebuild the keyword index, drop leftovers, re-embed missing vectors
+onefind compact                # checkpoint the WAL and VACUUM; prints before -> after size
+```
+
+All three take `--db` / `--collection`. The app has the same actions under **Manage →
+Maintenance**, plus *Full rebuild*, *Reindex with vectors* and *Clear collection…*.
+
+**Exit codes:** `0` success, `2` usage/validation, `3` environment, `4` data error (missing
+collection, failed integrity check), `130` cancelled.
+
+## 10. Run the tests
 
 ```bash
 pytest
 ```
 
-The current suite contains 112 tests. It uses a small real-model integration suite plus fake embedders for fast edge-case coverage. No paid service is used.
-
-For only mandatory model-free tests:
+The suite has more than 850 tests and runs offline after the first model download. It includes a
+small real-MiniLM integration suite, and fake embedders cover edge cases. To run only the
+model-free tests (as CI does):
 
 ```bash
 pytest -q \
-  tests/test_fusion.py \
-  tests/test_search_edges.py \
-  tests/test_search_lexical.py \
-  tests/test_ingest.py \
-  tests/test_envcheck.py \
-  tests/test_cli.py \
-  tests/test_store.py \
-  tests/test_sample_corpus.py
+  tests/test_fusion.py tests/test_search_edges.py tests/test_search_lexical.py \
+  tests/test_ingest.py tests/test_envcheck.py tests/test_cli.py tests/test_store.py \
+  tests/test_sample_corpus.py tests/test_store_v3.py tests/test_ingest_v3.py \
+  tests/test_library.py tests/test_jobs.py tests/test_snippets.py tests/test_search_v3.py \
+  tests/test_integration_v3.py tests/test_static_ui.py tests/test_cli_v3.py
 ```
 
-## 8. Reproduce the BEIR evaluations
+## 11. Live browser walkthrough (`tools/ui_check.py`)
 
-The corrected harness builds into a temporary database and publishes it only after a successful run. Existing databases are never destructively cleared in place.
+`tools/ui_check.py` is the end-to-end check for the v1.2 app. It:
+
+1. builds a realistic notes folder and an empty library in a scratch folder;
+2. starts `onefind serve --no-open --port <port>` with `ONEFIND_HOME=<scratch>/home`;
+3. drives an installed Chrome with Playwright through first run, the index wizard, live search,
+   every result state (results, weak matches, no results, error), filters, Explain, preview,
+   saved searches, bookmarks, export, collections, backup and restore, maintenance, keyboard use,
+   themes, reduced motion, five window widths, and the server stopping mid-session;
+4. asserts more than 300 checks and saves screenshots.
+
+```bash
+pip install -e ".[browser]"
+python tools/ui_check.py                              # scratch: <temp>/onefind-ui, port 8765
+python tools/ui_check.py --scratch C:\tmp\uicheck --port 8799 --headed
+python tools/ui_check.py --release screenshots/v1.2   # also write the numbered release screenshots
+```
+
+| Option | Effect |
+|---|---|
+| `--scratch DIR` | Working folder for notes, library home and logs (default `<temp>/onefind-ui`) |
+| `--out DIR` | Screenshot folder (default `<scratch>/shots`) |
+| `--port N` | Server port (default 8765) |
+| `--chrome PATH` | Chrome/Chromium executable (or set `ONEFIND_CHROME`); auto-detected otherwise |
+| `--headed` / `--slow MS` | Watch the run / slow it down for debugging |
+| `--release DIR` | Capture the light/dark × 1280/375 release set (see `screenshots/v1.2/README.md`) |
+
+It prints `N checks passed, M problems` and exits `0` only when every check passed. It never
+downloads a browser and touches nothing outside the scratch folder.
+
+The v1.1 evidence runner is still available: `python tools/browser_check.py --output sshot`.
+
+## 12. Reproduce the BEIR evaluations (research)
+
+The harness builds into a temporary database and publishes it only after a successful run. It
+never clears an existing database in place.
 
 ```bash
 onefind eval scifact --db data/scifact.db
 onefind eval nfcorpus --db data/nfcorpus.db
 ```
 
-Each run evaluates eight configurations and writes a provenance-rich report under `benchmarks/reports/`. Reports include:
+Each run evaluates eight configurations and writes a provenance-rich report under
+`benchmarks/reports/`. The report covers nDCG@10, MAP@10, MRR@10 and P@10; p50/p95 latency; model
+name and revision; corpus/query/qrels SHA-256; package versions, Python, OS and Git commit; and
+database health and the configuration manifest.
 
-- nDCG@10, MAP@10, MRR@10, and Precision@10;
-- p50 and p95 query latency;
-- model name and resolved revision;
-- corpus/query/qrels SHA-256 fingerprints;
-- package versions, Python, OS, and Git commit;
-- database health and configuration manifest.
-
-For a quick pipeline check:
+A quick pipeline check (not for reportable numbers):
 
 ```bash
 onefind eval scifact --db data/scifact-smoke.db --max-docs 100 --limit-queries 50
 ```
 
-Capped runs are intended for pipeline validation; use full runs for reportable effectiveness comparisons.
-
-## 9. Run the fusion extension
+Fusion extension (alpha sweep; α=0 is an exact keyword passthrough, α=1 an exact semantic
+passthrough):
 
 ```bash
 onefind sweep-alpha scifact --db data/scifact.db
 onefind sweep-alpha nfcorpus --db data/nfcorpus.db
 ```
 
-The sweep verifies that the database manifest matches the exact dataset before loading the model. At `alpha=0`, linear fusion is an exact keyword passthrough; at `alpha=1`, it is an exact semantic passthrough.
-
-## 10. Useful CLI examples
+Sample-corpus gold queries:
 
 ```bash
-# Keyword search
-onefind search "chlorophyll" --db demo.db --mode lexical
-
-# Semantic paraphrase
-onefind search "how plants turn sunlight into food" --db demo.db --mode semantic
-
-# Hybrid RRF
-onefind search "vitamin" --db demo.db --mode hybrid
-
-# Hybrid with 50 candidates per leg and cosine reranking
-onefind search "money after a surprise repair" --db demo.db \
-  --mode hybrid --rerank --candidate-depth 50
-
-# Weighted fusion
-onefind search "vitamin" --db demo.db \
-  --mode hybrid --fusion linear --alpha 0.5
+onefind index ./sample-data --db demo.db --embed
+onefind smoke --db demo.db --queries sample-data/queries.jsonl
 ```
 
-## 11. HTTP API
+## 13. Research search flags
 
-- `GET /api/stats` — readiness, capabilities, counts, size, model, and health.
-- `POST /api/search` — validated keyword, semantic, or hybrid search.
-- `GET /health` — lightweight service health.
-- `POST /api/reset` — disabled unless the server receives an explicit reset token.
+```bash
+onefind search "chlorophyll" --db demo.db --mode lexical
+onefind search "how plants turn sunlight into food" --db demo.db --mode semantic
+onefind search "vitamin" --db demo.db --mode hybrid --precision int8
+onefind search "money after a surprise repair" --db demo.db --mode hybrid --rerank --candidate-depth 50
+onefind search "vitamin" --db demo.db --mode hybrid --fusion linear --alpha 0.5
+```
 
-Example:
+## 14. HTTP API (summary)
+
+The web app uses a JSON API on the same port. The full contract is in
+[`docs/11-implementation-contract.md`](docs/11-implementation-contract.md) §6. Every
+state-changing endpoint added in v1.2 requires the header `X-OneFind-Request: 1`. Errors use
+`{"error": {"code", "message", "retryable", "action"?}}`.
+
+| Area | Endpoints |
+|---|---|
+| Status | `GET /health`, `GET /api/stats` (status, status sentence, size class, active job) |
+| Search | `POST /api/search`, `POST /api/search/stream` (NDJSON stages, then the result), `GET /api/facets` |
+| Collections | `GET/POST /api/collections`, `POST /api/collections/{open,active,rename,remove}` |
+| Indexing | `GET /api/fs/list`, `POST /api/index` (202 + job), `GET /api/jobs[/{id}]`, `POST /api/jobs/{id}/cancel`, `GET /api/index/changes` |
+| Documents | `GET /api/documents/{doc_id}`, `POST /api/documents/open`, `POST /api/documents/remove`, `GET /api/recent-documents` |
+| Personal | `GET/POST /api/history`, `POST /api/history/clear`, `GET/POST /api/saved`, `DELETE /api/saved/{id}`, `GET/POST /api/bookmarks`, `DELETE /api/bookmarks/{doc_id}` |
+| Maintenance | `POST /api/maintenance/{backup,restore,check,repair,compact,clear}`, `GET /api/backups` |
 
 ```bash
 curl -X POST http://127.0.0.1:8080/api/search \
@@ -171,65 +328,34 @@ curl -X POST http://127.0.0.1:8080/api/search \
   -d '{"query":"compost","mode":"hybrid","precision":"float","k":10}'
 ```
 
-## 12. Troubleshooting
+## 15. Troubleshooting
 
-### Schema version mismatch
+**`onefind: command not found`**: activate the environment, then run `python -m pip show onefind`
+and `onefind --version`.
 
-Schema-v1 databases from the earlier prototype are intentionally rejected. Rebuild them:
+**`error: no OneFind collection at onefind.db`** (exit 4): there is no `./onefind.db` and no active
+collection. Index a folder first, or pass `--collection NAME` / `--db FILE`.
 
-```bash
-onefind eval scifact --db data/scifact.db
-```
+**The app shows "No index ready" although you indexed with the CLI**: the CLI wrote `./onefind.db`
+(no `--collection`). Either `onefind serve --db onefind.db`, or index with `--collection NAME` so
+the library knows about it.
 
-### `onefind: command not found`
+**Schema version mismatch**: schema-v1 databases from the earliest prototype are rejected. Rebuild
+them. v2 databases (v1.1) migrate to v3 automatically the first time they are opened.
 
-Activate the environment and confirm:
+**Model download fails**: check internet access and free cache space, then retry with
+`onefind check --full`. Document and query text is never sent to a hosted model service.
 
-```bash
-python -m pip show onefind
-onefind --version
-```
+**Vector extension unavailable**: run `onefind check` and use an official CPython build with SQLite
+extension loading. Keyword search keeps working without it.
 
-### Model download fails
+**A collection is "busy"**: another OneFind job, a backup tool or a sync client is writing to the
+`.db`. Wait and retry. Avoid putting live collection files inside a syncing folder. Sync the
+backups instead.
 
-Check internet access and free cache space, then retry:
+## 16. Zero-cost operating model
 
-```bash
-onefind check --full
-```
-
-The project never sends document or query text to a hosted model service.
-
-### Vector extension is unavailable
-
-Run:
-
-```bash
-onefind check
-```
-
-Use an official CPython build with SQLite extension loading enabled. Keyword-only search still works without the model, but semantic/hybrid modes require vectors.
-
-## 13. Reproduce the browser evidence
-
-The repository includes a comprehensive Playwright scenario runner. It uses an already-installed Chrome/Chromium binary and does not download a browser or call a hosted service.
-
-```bash
-pip install -e ".[browser]"
-python tools/browser_check.py --output sshot
-```
-
-The command starts temporary indexed, lexical-only, no-index, and hostile-content fixtures on ports 8090–8093, drives the real UI, captures 21 screenshots, validates retrieval/result/security assertions, and stops the services. See `sshot/README.md` and `sshot/manifest.json`.
-
-## 14. Zero-cost operating model
-
-- CPU-only MiniLM embeddings
-- local SQLite and sqlite-vec
-- local FTS5 and NumPy
-- vanilla HTML/CSS/JavaScript
-- no telemetry
-- no paid APIs
-- no hosted services
-- datasets and model cache are reusable
-
-See `README.md` for architecture and current results.
+- CPU-only MiniLM embeddings, cached locally
+- Local SQLite, FTS5 and sqlite-vec
+- Vanilla HTML/CSS/JavaScript (no CDN, fonts or build step)
+- No telemetry, paid APIs or hosted services

@@ -33,6 +33,10 @@ def test_reindex_is_idempotent(db_path):
         first_stats = idx.stats()
         ingest_path(idx, SAMPLE)
         second_stats = idx.stats()
+    # v1.2: stats() reports when indexing last finished; that timestamp is
+    # expected to move on a re-run, everything else must stay identical.
+    first_stats.pop("last_indexed_at")
+    second_stats.pop("last_indexed_at")
     assert first_stats == second_stats
     assert first_stats["documents"] == 20
 
