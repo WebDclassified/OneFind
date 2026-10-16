@@ -225,7 +225,8 @@ def test_relaxed_results_note_is_wired():
 
 
 def test_ui_check_tool_is_importable():
-    spec = importlib.util.spec_from_file_location("ui_check", ROOT / "tools" / "ui_check.py")
+    pytest.importorskip("playwright")
+    spec =importlib.util.spec_from_file_location("ui_check", ROOT / "tools" / "ui_check.py")
     module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)
     args = module.parse_args(["--scratch", str(ROOT / "build-ui-check"), "--port", "9999"])
