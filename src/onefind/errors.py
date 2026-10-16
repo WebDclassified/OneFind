@@ -37,3 +37,9 @@ class DataError(OneFindError):
 
 class CorpusNotFoundError(DataError):
     pass
+
+
+class OperationCancelled(OneFindError):
+    """A long-running operation was cancelled by the user (Ctrl+C / Cancel)."""
+
+    exit_code = 130

@@ -24,6 +24,7 @@ from .embed import DEFAULT_MODEL, SentenceEmbedder
 from .errors import DataError, UsageError
 from .ingest import Document
 from .search import search as run_search
+from .search import search_detailed
 from .store import Index
 
 METRICS = ["ndcg@10", "map@10", "mrr@10", "precision@10"]
@@ -66,10 +67,17 @@ def _percentile(values: list[float], fraction: float) -> float:
 
 
 def run_smoke(db: str | Path, queries_path: str | Path, k: int = 5,
-               model_name: str = DEFAULT_MODEL) -> dict:
-    """Evaluate the bundled or custom JSONL gold queries against an index."""
+               model_name: str = DEFAULT_MODEL, *, lexical_match: str = "auto") -> dict:
+    """Evaluate the bundled or custom JSONL gold queries against an index.
+
+    ``lexical_match`` is the keyword matching for lexical and hybrid cases
+    ("auto" by default, the same as the web app and ``onefind search``;
+    semantic cases always use "all", which they ignore). The result records it.
+    """
     if not 1 <= k <= 50:
         raise UsageError("k must be within 1..50")
+    if lexical_match not in ("all", "any", "auto"):
+        raise UsageError("lexical_match must be 'all', 'any' or 'auto'")
     query_file = Path(queries_path)
     if not query_file.is_file():
         raise DataError(f"smoke query file not found: {query_file}")
@@ -98,14 +106,15 @@ def run_smoke(db: str | Path, queries_path: str | Path, k: int = 5,
         if any(case["mode"] != "lexical" for case in cases):
             index.attach_embedder(SentenceEmbedder(model_name or DEFAULT_MODEL))
         for case in cases:
-            hits = run_search(
+            outcome = search_detailed(
                 index,
                 case["query"],
                 mode=case["mode"],
                 k=k,
                 precision="float",
+                lexical_match=lexical_match if case["mode"] in ("lexical", "hybrid") else "all",
             )
-            ids = [hit.doc_id for hit in hits]
+            ids = [hit.doc_id for hit in outcome.hits]
             if case["relevant"]:
                 rank = next(
                     (position for position, doc_id in enumerate(ids, start=1)
@@ -113,7 +122,11 @@ def run_smoke(db: str | Path, queries_path: str | Path, k: int = 5,
                     None,
                 )
             else:
-                rank = 1 if not ids else 0
+                # A no-answer case passes when nothing *strong* comes back:
+                # no hits, or only weak ones (the app then says "No strong
+                # matches"). "auto" tops a keyword search up with partial
+                # matches, so a lone common word may return weak hits.
+                rank = 1 if not ids or outcome.abstained else 0
             rows.append(
                 {
                     "query": case["query"],
@@ -136,6 +149,7 @@ def run_smoke(db: str | Path, queries_path: str | Path, k: int = 5,
         "hit_at_3": hit_at_k / len(answerable) if answerable else 0.0,
         "mrr_at_k": mrr / len(answerable) if answerable else 0.0,
         "no_answer_accuracy": no_answer_ok / len(no_answer) if no_answer else 1.0,
+        "lexical_match": lexical_match,
         "rows": rows,
     }
 
@@ -192,6 +206,10 @@ def run_eval(source: str, db: str | Path, k: int = 10,
 
     try:
         with Index.open(staging) as index:
+            # BEIR protocol: exactly one whole-document vector per document,
+            # so published numbers stay reproducible. New collections split
+            # long notes into passages by default; evaluation never does.
+            index.set_chunking(None)
             print(f"loading embedding model: {model_name} ...")
             embedder = SentenceEmbedder(model_name)
             index.attach_embedder(embedder)
@@ -244,6 +262,7 @@ def run_eval(source: str, db: str | Path, k: int = 10,
                 "k": k,
                 "metrics": METRICS,
                 "configurations": [list(config) for config in CONFIGS],
+                "chunking": index.chunking_config(),  # always None (whole documents)
             }
             index.set_meta("eval_manifest", json.dumps(manifest, sort_keys=True))
             stats = index.stats()
@@ -335,6 +354,14 @@ def run_alpha_sweep(source: str, db: str | Path, alphas: list[float] | None = No
                 f"index corpus does not match dataset '{source}' "
                 f"({missing} missing, {extra} extra documents); rebuild it with "
                 f"'onefind eval {source} --db {db}'"
+            )
+        split = index.conn.execute(
+            "SELECT 1 FROM chunks GROUP BY doc_id HAVING COUNT(*) > 1 LIMIT 1"
+        ).fetchone()
+        if split is not None:
+            raise DataError(
+                "this evaluation index splits documents into passages; rebuild it with "
+                f"'onefind eval {source} --db {db}' (evaluation uses one vector per document)"
             )
 
         from .embed import SentenceEmbedder

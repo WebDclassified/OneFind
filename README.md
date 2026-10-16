@@ -1,27 +1,78 @@
-# OneFind — Free Local Hybrid Information Retrieval
+# OneFind: private search for your notes
 
-**OneFind** combines SQLite FTS5 keyword search, sqlite-vec float KNN, quantized semantic ranking, and Reciprocal Rank Fusion in one local SQLite file. It ships as a Python library, a lowercase cross-platform CLI, a polished localhost web UI, reproducible BEIR evaluations, and a 20-document offline demo corpus.
+**OneFind is a local search app for your notes and documents.** Point it at a folder of Markdown or
+text files and it builds one index file that you can search by exact keyword, by meaning, or by
+both at once (hybrid search). It runs in your browser on `127.0.0.1`. Your notes, queries and index
+stay on your computer, and you don't need an account, a cloud service or a GPU.
 
-Everything runs on free, local CPU infrastructure. There are no paid APIs, cloud services, hosted vector databases, telemetry, or frontend dependencies.
+Underneath the app is a research engine: a careful, test-backed reproduction of
+**arXiv:2608.24060**, which puts SQLite FTS5 keyword search, sqlite-vec vector search, quantized
+ranking and Reciprocal Rank Fusion into a single SQLite file. The benchmark evidence is in
+[Under the hood](#under-the-hood-the-research-engine) below.
 
-> Corrected v1.1 evidence supersedes the original prototype reports after the BM25, rerank-score, and fusion fixes. See `benchmarks/reports/` and `HOW_TO_RUN.md`.
+| Hybrid results | Why this result (dark) |
+|---|---|
+| ![Search results for "vitamin c immune system" in hybrid mode, with highlighted snippet and a Strong match label](screenshots/v1.2/06-results-light-1280.png) | ![The Explain panel listing matched keywords, meaning similarity and how each search leg ranked the note](screenshots/v1.2/07-explain-dark-1280.png) |
+| **Indexing a folder** | **Manage: health, maintenance, backups (dark)** |
+| ![The index wizard's progress stepper: Scan files, Index text, Build vectors, Ready](screenshots/v1.2/03-index-progress-light-1280.png) | ![The Manage panel showing collection health and maintenance actions](screenshots/v1.2/13-manage-dark-1280.png) |
 
-## Highlights
+All 15 states in light and dark, at desktop and phone widths, are in
+[`screenshots/v1.2/`](screenshots/v1.2/README.md).
 
-- Correct strongest-first BM25 ranking with deterministic tie-breaking.
-- Native float cosine KNN through sqlite-vec.
-- Exact int8 and binary ranking in bounded NumPy blocks.
-- Hybrid RRF plus weighted linear fusion with exact endpoint passthrough.
-- Optional cosine reranking over a configurable 50-document-per-leg candidate pool.
-- Transactional document, FTS, chunk, and vector writes.
-- Collision-safe relative-path document IDs and JSONL ingestion.
-- Atomic, manifest-bound evaluation databases.
-- 20 cross-domain sample documents and 26 gold retrieval queries.
-- 112 automated tests, including fake-model edge cases and local MiniLM integration.
-- Responsive, accessible, CSP-protected UI packaged inside the wheel.
-- CPU-only operation with a reusable local model cache.
+---
 
-## Quickstart
+## Contents
+
+- [What it does](#what-it-does)
+- [Two-minute quickstart](#two-minute-quickstart)
+- [Collections, backups and moving to another computer](#collections-backups-and-moving-to-another-computer)
+- [Auto-sync](#auto-sync)
+- [Privacy](#privacy)
+- [Keyboard shortcuts](#keyboard-shortcuts)
+- [CLI quick reference](#cli-quick-reference)
+- [Honest limits](#honest-limits)
+- [Testing](#testing)
+- [Project structure](#project-structure)
+- [Under the hood: the research engine](#under-the-hood-the-research-engine)
+
+For a plain-language, task-by-task walkthrough, see the
+**[User Guide](docs/12-user-guide.md)**.
+
+---
+
+## What it does
+
+- **Three ways to search.** *Keyword* finds exact words, names and codes. *Meaning* finds notes
+  about the same idea even when they use different words. *Hybrid* (the default) combines both.
+- **Live results as you type.** Results are debounced, stale requests are cancelled, and a short
+  staged progress line shows each step (understanding query → keyword → meaning → combining →
+  preparing).
+- **Honest results.** Each result gets a *Strong*, *Good* or *Weak* match label. Weak matches are
+  grouped under "Weaker matches". When nothing fits well, OneFind says "No strong matches" rather
+  than presenting a weak hit as the answer.
+- **Why this result.** *Explain* shows the matched words, how keyword and meaning search each
+  ranked the note, and the similarity score.
+- **Filters** by folder, file type, modified date, and front-matter tags.
+- **Act on results.** Open the file in its default app, show it in its folder, preview it with
+  find-in-document, copy the snippet, bookmark it, or export the results as Markdown or JSON.
+- **Pick up where you left off.** The home screen shows recent searches, saved searches (which keep
+  their mode and filters), recently opened documents and bookmarks.
+- **Collections.** Keep separate indexes such as "Notes", "Work" and "Project X", and switch
+  between them from the header.
+- **Maintenance built in.** Updates are incremental, so only new and changed files are read. You
+  can also exclude patterns, remove deleted files, check integrity and repair, compact, back up,
+  restore, and clear a collection, all with confirmations where it matters.
+- **Comfortable to use.** Light and dark themes, full keyboard control, Reduce motion, screen-reader
+  labels, and layouts down to 320 px wide.
+
+Supported files: `.md`, `.markdown`, `.txt`, `.text`, `.rst`, `.org` (and `.jsonl` datasets
+from the CLI). A leading YAML-style front-matter block can set `title:` and `tags:`.
+
+---
+
+## Two-minute quickstart
+
+You need **Python 3.11+** and Git.
 
 ```bash
 git clone https://github.com/WebDclassified/OneFind.git
@@ -29,10 +80,8 @@ cd OneFind
 python -m venv .venv
 ```
 
-Activate the environment:
-
 ```powershell
-# Windows
+# Windows PowerShell
 .\.venv\Scripts\Activate.ps1
 ```
 
@@ -41,100 +90,333 @@ Activate the environment:
 source .venv/bin/activate
 ```
 
-Install the complete free local stack:
+Install the app with meaning search:
 
 ```bash
 python -m pip install --upgrade pip
+pip install -e ".[model,serve]"
+```
+
+(`pip install -e ".[serve]"` alone gives you keyword search only. Use `.[model,eval,serve,dev]`
+for the full development stack.)
+
+Start it:
+
+```bash
+onefind serve
+```
+
+Open **<http://127.0.0.1:8080/>**. On first launch the welcome screen offers **Index a folder**:
+
+1. Choose a folder in the folder browser, or type its path.
+2. Leave **Build vectors for meaning search** ticked (the first run downloads the small
+   all-MiniLM-L6-v2 model once).
+3. Watch the progress (*Scan files → Index text → Build vectors → Ready*), then choose **Start
+   searching**.
+
+With no `--db`, `onefind serve` runs in **library mode**. Your collections are listed in a
+per-user library folder:
+
+| OS | Library folder |
+|---|---|
+| Windows | `%APPDATA%\OneFind` |
+| macOS | `~/Library/Application Support/OneFind` |
+| Linux | `$XDG_DATA_HOME/onefind` or `~/.local/share/onefind` |
+
+Set `ONEFIND_HOME` (or `serve --home DIR`) to use a different library folder. `onefind serve --db
+my.db` still serves a single file, as in v1.1.
+
+**Want a demo corpus first?** The repository ships 20 cross-domain sample notes:
+
+```bash
+onefind index ./sample-data --collection Sample --embed
+onefind serve
+```
+
+---
+
+## Collections, backups and moving to another computer
+
+**A collection is one SQLite file** (`.db`). It contains the search index and the text of your
+documents, plus your search history, saved searches, bookmarks and the list of folders it indexes.
+It does **not** contain your original files, so OneFind never moves, edits or deletes your notes.
+
+| Task | In the app | From the terminal |
+|---|---|---|
+| Create / switch | Header → collection switcher → *New collection…* | `onefind collections create Work` / `onefind collections use Work` |
+| Add a folder | *Index a folder*, or Manage → Maintenance → *Add a folder…* | `onefind index ~/Notes --collection Work --embed` |
+| Pick up changes | Automatic with **Auto-sync** (Manage → Health), or Manage → Health → *Update index* | `onefind watch --collection Work`, or `onefind index ~/Notes --collection Work --prune` |
+| A folder moved | Manage → Health → *Locate…* next to the missing folder | `onefind folders relocate OLD NEW --collection Work` |
+| Stop indexing a folder | Manage → Health → *Remove from collection* | `onefind folders remove FOLDER --collection Work` |
+| Back up | Manage → Backups → *Back up now* | `onefind backup --collection Work` |
+| Restore | Manage → Backups → *Restore…* → *Restore as a new collection* or *Replace current…* | `onefind restore BACKUP.db --as "Work restored"` |
+| Open a moved file | Collection switcher → *Open existing collection file…* | `onefind collections create Work --db ~/Moved/work.db` |
+
+Backups use SQLite's online backup API, so they are safe to take while OneFind is running. They go
+to the library's `backups/` folder as `<collection>-YYYYmmdd-HHMMSS.db`. **Replace current** asks
+you to type the collection name and makes a safety backup first. **Restore as a new collection**
+leaves your current collection untouched.
+
+**Moving to another computer:** make a backup (or copy the `.db` while OneFind is closed), copy it
+across, and on the new machine choose **Open existing collection file…** (or `onefind collections
+create NAME --db PATH`). Search and preview work straight away, because the text travels inside the
+file. *Open* and *Show in folder* need the original notes folder at the same path. Re-index from
+the folder's new location to update paths.
+
+---
+
+## Auto-sync
+
+Turn on **Auto-sync** (Manage → Health, or the *Keep this collection up to date automatically* box
+in the index wizard, which is on for new collections) and OneFind keeps the index up to date while
+you write. It checks your folders every few seconds and updates the index when notes are added,
+changed or deleted. Everything stays on this computer.
+
+- **Gentle polling, no extra dependency.** A stat-only walk (file names, sizes and modification
+  times; nothing is read) honours your exclude patterns and the built-in skips. A change is indexed
+  only after the folder has stayed the same for two checks, so a note that is still being saved is
+  never indexed half-written. Very large folders are checked less often, which keeps CPU use low.
+- **Out of the way.** The work runs as a normal incremental update in the background: the status
+  pill reads *Ready · Auto-sync on*, briefly *Syncing 3 changes…*, and results refresh quietly. A
+  manual update, rebuild or maintenance task always takes priority.
+- **Careful.** Folders on other computers (network shares) are never polled. A folder that is
+  missing, unplugged or suddenly empty keeps its notes in the index.
+- **Saved in the collection.** The on/off setting lives in the collection's `.db` file, so it
+  travels with backups. Collections made before 1.2.1 start with it off. `onefind serve` honours
+  it (`--no-auto-sync` turns it off for that server), and `onefind watch` runs the same
+  auto-sync in a terminal until Ctrl+C.
+
+---
+
+## Privacy
+
+- Your notes, queries, search history and index **never leave your computer**. OneFind has no
+  telemetry, no accounts, and no hosted search or embedding API. The frontend loads no CDN, web
+  font or analytics script, and a strict Content-Security-Policy blocks inline and third-party
+  scripts.
+- Meaning search runs on a small open model (`sentence-transformers/all-MiniLM-L6-v2`) **on your
+  CPU**. The model is downloaded once from Hugging Face the first time you build vectors. After
+  that it loads from the local cache with no network requests (set `HF_HUB_OFFLINE=1` as well if
+  you want the Hugging Face libraries themselves to refuse any network access).
+- The server binds to `127.0.0.1` only. A non-loopback bind is refused unless you pass
+  `--allow-remote`. The app has no login, so only do that behind a trusted firewall or an
+  authenticated proxy. Opening and revealing files works only for loopback requests, only for
+  files inside a folder you indexed, and can be turned off with `--no-open`.
+- Every state-changing endpoint added in v1.2 (indexing, collections, backups, maintenance,
+  bookmarks and so on) requires an `X-OneFind-Request: 1` header, which guards against cross-site
+  requests. Indexed text is always rendered as text, never as HTML.
+
+---
+
+## Keyboard shortcuts
+
+| Key | Action |
+|---|---|
+| `/` or `Ctrl`+`K` (`Cmd`+`K`) | Focus the search box |
+| `Enter` in the search box | Search now (otherwise results update as you type) |
+| `↓` `↑` or `j` `k` | Move between results |
+| `Home` / `End` | First / last result |
+| `Enter` on a result | Preview the document |
+| `o` | Open the file |
+| `c` | Copy the snippet |
+| `b` | Bookmark / remove bookmark |
+| `e` | Explain why it matched |
+| `Esc` | Close the preview, then clear the search |
+| `?` | Show the shortcuts list |
+
+You can turn off single-key shortcuts in **Manage → Preferences** if they get in the way of speech
+input or other tools.
+
+---
+
+## CLI quick reference
+
+The command is lowercase `onefind` on every OS (or `python -m onefind.cli`). Exit codes: `0`
+success, `2` usage error, `3` environment problem, `4` data error, `130` cancelled.
+
+**Which collection does a command use?** `--db PATH` wins, then `--collection NAME`, then
+`./onefind.db`. Read and maintenance commands (`search`, `status`, `doctor`, `compact`, `backup`,
+`remove`) fall back to the library's **active** collection when there is no `./onefind.db`.
+
+| Command | What it does |
+|---|---|
+| `onefind check [--full] [--json]` | Verify Python, SQLite FTS5, sqlite-vec and (with `--full`) load the model |
+| `onefind serve [--db FILE] [--home DIR] [--port 8080] [--no-open] [--allow-remote] [--no-auto-sync]` | Run the web app (library mode without `--db`); keeps auto-sync collections up to date |
+| `onefind watch [--collection NAME] [--interval S]` / `onefind watch --set on\|off` | Auto-sync in the foreground until Ctrl+C / save a collection's auto-sync setting |
+| `onefind index PATH [--collection NAME] [--embed] [--exclude PATTERN]… [--prune] [--full] [-q]` | Index or update a folder (incremental; exclusions are remembered per folder) |
+| `onefind search QUERY [--mode lexical\|semantic\|hybrid] [--k N] [--folder F] [--type md] [--tag T] [--since YYYY-MM-DD] [--explain]` | Search from the terminal |
+| `onefind status [--no-scan] [--json]` | Health, passages, changed files per folder, and the last indexing run |
+| `onefind folders list [--json]` | The collection's folders, with ids, note counts, saved exclusions and missing folders |
+| `onefind folders remove FOLDER [--keep-documents]` | Forget a folder; its notes leave the index unless `--keep-documents` (files are never touched) |
+| `onefind folders relocate OLD NEW` | Point a moved folder at its new place; every note keeps its id |
+| `onefind rebuild-vectors [--chunking keep\|default\|off] [-q]` | Split long notes into passages and rebuild their vectors (Ctrl+C stops cleanly; rerun to continue) |
+| `onefind collections list [--json]` | List collections (`*` = active) |
+| `onefind collections create NAME [--db FILE]` | New collection, or register an existing `.db` |
+| `onefind collections use NAME` | Make a collection active |
+| `onefind collections rename NAME NEW_NAME` | Rename (the file keeps its name) |
+| `onefind collections remove NAME [--delete-file --yes]` | Forget a collection (file kept unless `--delete-file --yes`) |
+| `onefind backup [--out FILE\|DIR] [--overwrite]` / `onefind backup --list` | Write or list single-file backups |
+| `onefind restore BACKUP --as NAME` | Restore a backup as a new collection |
+| `onefind doctor [--repair]` | Integrity check; `--repair` rebuilds the keyword index, drops leftovers, re-embeds missing vectors |
+| `onefind compact` | Reclaim unused space in the collection file |
+| `onefind remove DOC_ID…` | Remove notes from the index (files on disk are untouched) |
+| `onefind eval DATASET` | Build and evaluate a BEIR dataset (research) |
+| `onefind sweep-alpha DATASET --db FILE` | Compare linear fusion weights against RRF (research) |
+| `onefind smoke --db FILE [--queries FILE] [--match auto\|all\|any]` | Run JSONL gold queries against an index (same keyword matching as the app by default) |
+
+Read and maintenance commands, including `folders`, `watch` and `rebuild-vectors`, take `--db` /
+`--collection` and fall back to the active collection.
+
+Advanced search flags: `--precision float|int8|binary`, `--rerank`, `--candidate-depth N`,
+`--fusion rrf|linear`, `--alpha A`, `--rrf-k K`. Run `onefind <command> --help` for details.
+[HOW_TO_RUN.md](HOW_TO_RUN.md) has worked examples.
+
+---
+
+## Honest limits
+
+OneFind is designed for **personal and small-team collections on one computer**.
+
+- **Size.** Up to about **5,000 notes** is the sweet spot. **5,000 to 50,000** is fine: search
+  stays quick, but full rebuilds and building vectors take minutes. **Above about 50,000** is
+  beyond its comfort zone. Keyword search stays fast, but filtered, int8 and binary meaning
+  searches scan every vector. Manage → Health says when you cross these lines. Measured hybrid p95
+  latency is about **175 to 220 ms** on 3.6k to 5.2k-document BEIR corpora on a laptop CPU (see
+  below).
+- **Long notes are split into passages.** The model reads roughly 256 tokens (about 200 words) per
+  text, so new collections split notes longer than 200 words into overlapping passages, embed each
+  one, and rank a note by its best passage. The preview marks the passage a meaning match came
+  from. Collections created before 1.2.1 keep one vector per note (meaning search sees only the
+  opening of long notes) until you rebuild their vectors: Manage → Health offers *Split long
+  notes*, or run `onefind rebuild-vectors --collection NAME --chunking default`. It runs in the
+  background, can be cancelled, and continues where it stopped. Keyword search always covers the
+  full text.
+- **Plain text only.** No PDF, Word, HTML or OCR. Files over 5 MB, binary files and empty files are
+  skipped and listed as skipped after indexing.
+- **English-first model.** all-MiniLM-L6-v2 is trained mainly on English. Keyword search works for
+  any language that FTS5's `unicode61` tokenizer can split.
+- **Single user, local only.** No accounts, sharing or cloud sync. Folder changes are picked up
+  by polling (Auto-sync, every few seconds) rather than file-system events, so a saved note appears
+  a few seconds later; with Auto-sync off, run *Update index* (or `onefind index … --prune`) and
+  Manage → Health tells you when folders have changed.
+- **Quantized speed.** int8 and binary match float quality closely, but this implementation does
+  **not** reproduce the paper's quantized speed advantage (details below).
+
+---
+
+## Testing
+
+```bash
 pip install -e ".[model,eval,serve,dev]"
-```
-
-Build and evaluate the expanded offline corpus:
-
-```bash
-onefind check --full
-onefind index ./sample-data --db demo.db --embed
-onefind smoke --db demo.db --queries sample-data/queries.jsonl
-```
-
-Start the UI:
-
-```bash
-onefind serve --db demo.db --port 8080
-```
-
-Open <http://127.0.0.1:8080/>.
-
-Run all tests:
-
-```bash
 pytest
 ```
 
-## CLI
+More than 950 tests cover storage and the v2→v3 migration, ingestion, snippets, search quality and
+calibration, the collection library, background jobs, the HTTP API, the CLI, and static UI
+contracts. Fake embedders cover edge cases, and a small real-MiniLM suite covers integration. The
+model-free subset that CI runs is listed in `.github/workflows/ci.yml`.
 
-| Command | Purpose |
+**Live UI walkthrough.** `tools/ui_check.py` starts a real `onefind serve --no-open` against a
+scratch library (`ONEFIND_HOME=<scratch>/home`) and drives an installed Chrome with Playwright
+through onboarding, indexing, every search state, filters, preview, Explain, saved searches,
+bookmarks, collections, backups and restore, maintenance, keyboard use, themes, reduced motion and
+five window widths. It asserts more than 300 checks and saves screenshots:
+
+```bash
+pip install -e ".[browser]"
+python tools/ui_check.py                              # scratch folder defaults to <temp>/onefind-ui, port 8765
+python tools/ui_check.py --release screenshots/v1.2   # also regenerate the release screenshot set
+```
+
+It uses an existing Chrome (`--chrome PATH` or `ONEFIND_CHROME` if it is not auto-detected) and
+never downloads a browser. Exit status `0` means every check passed.
+
+---
+
+## Project structure
+
+| Path | Purpose |
 |---|---|
-| `onefind check` | Verify Python, SQLite FTS5, sqlite-vec, and model availability |
-| `onefind index PATH` | Index a folder, text file, or JSONL corpus |
-| `onefind search QUERY` | Run lexical, semantic, or hybrid retrieval |
-| `onefind eval DATASET` | Build and evaluate a BEIR-style dataset |
-| `onefind sweep-alpha DATASET` | Compare linear fusion weights against RRF |
-| `onefind smoke` | Run JSONL gold queries against an existing index |
-| `onefind serve` | Start the secure local web application |
+| `src/onefind/store.py` | One-file SQLite store (schema v3): documents, FTS5, vectors, history, saved searches, bookmarks, runs, backup/integrity/repair/compact |
+| `src/onefind/ingest.py` | Folder/file/JSONL ingestion, front matter, excludes, incremental hashing, pruning, change scan |
+| `src/onefind/search.py` | Keyword, semantic and hybrid retrieval, filters, explain, confidence, stages |
+| `src/onefind/snippets.py` | Passage selection and safe highlight segments |
+| `src/onefind/library.py` | Named-collections registry (`collections.json`) and backup locations |
+| `src/onefind/jobs.py` | Background indexing jobs and the shared model cache |
+| `src/onefind/serve.py` | FastAPI app: JSON + NDJSON streaming API, CSRF guard, static assets |
+| `src/onefind/cli.py` | The `onefind` command |
+| `src/onefind/embed.py`, `envcheck.py`, `errors.py` | Model wrapper, environment check, typed errors |
+| `src/onefind/evaluate.py`, `datasets.py` | BEIR evaluation harness and dataset download |
+| `src/onefind/static/` | No-build web app (vanilla ES modules, CSS, SVG), packaged in the wheel |
+| `tests/` | Unit, integration, API, CLI and UI-contract tests |
+| `tools/ui_check.py` | Live browser walkthrough and release screenshots |
+| `tools/browser_check.py` | v1.1 browser evidence runner (`sshot/`) |
+| `sample-data/` | 20 sample notes and 26 gold queries |
+| `screenshots/v1.2/` | Release screenshots (light/dark × 1280/375) |
+| `benchmarks/reports/` | Evaluation and extension reports |
+| `docs/` | Product spec (10), implementation contract (11), [user guide (12)](docs/12-user-guide.md), and the original design docs (01–09) |
+| `HOW_TO_RUN.md` | Detailed setup, CLI recipes, evaluation reproduction |
+| `CHANGELOG.md` | Release notes |
+| `FORMAL_PROJECT_REPORT.md`, `REPORT.md` | Academic reports with historical context |
 
-## Architecture
+---
+
+## Under the hood: the research engine
+
+OneFind began as a from-scratch reproduction of **arXiv:2608.24060**: lexical, semantic and hybrid
+search in one SQLite file. The app above runs on that same engine, unchanged in ranking.
+
+### Architecture
 
 ```text
-CLI / web UI / evaluation harness
+web app (static ES modules)  ·  onefind CLI  ·  evaluation harness
+                 │                   │
+         FastAPI (loopback) ─── background jobs + model cache
                  │
                  ▼
-       onefind.search dispatcher
+       onefind.search dispatcher ── filters · explain · confidence
         ┌────────┼──────────┐
         ▼        ▼          ▼
-     FTS5 BM25  float KNN  hybrid RRF
+     FTS5 BM25  vector KNN  hybrid RRF / linear (+ optional rerank)
         │        │          │
         └────────┴────┬─────┘
                       ▼
                one SQLite file
-      documents · chunks · FTS · vectors · manifest
+   documents · chunks · FTS · vectors · manifest
+   roots · history · saved · bookmarks · activity · runs
 ```
 
 ### Retrieval paths
 
-- **Keyword:** SQLite FTS5/BM25, strongest match first.
+- **Keyword:** SQLite FTS5/BM25, strongest match first. The app uses "auto" matching: notes with
+  all your words come first, topped up with partial matches when there are too few, and it says so.
 - **Semantic float:** native sqlite-vec cosine KNN over normalized float32 vectors.
 - **Semantic int8:** globally scaled 8-bit cosine ranking in bounded blocks.
 - **Semantic binary:** sign-bit Hamming ranking in bounded blocks.
-- **Hybrid:** RRF by default; linear normalization is available for research comparisons.
-- **Rerank:** one query encoding, complete fused-pool cosine scoring, and refreshed output scores.
+- **Hybrid:** RRF by default. Linear normalization is available for research comparisons.
+- **Rerank:** one query encoding, cosine scoring of the full fused pool, and refreshed output
+  scores.
+- **Filters** restrict both legs before ranking. Semantic search with filters uses an exact scan
+  of the allowed rows and never post-filters a top-k, which would lose results.
+- Ordering is deterministic (score descending, then `doc_id` ascending).
 
-## Sample retrieval corpus
+### Sample retrieval corpus
 
-The bundled `sample-data/` directory contains 20 short documents across:
+`sample-data/` holds 20 short documents covering plant biology, nutrition, exercise, fermentation,
+intertidal ecology, bicycle mechanics, sleep, composting, clouds, music theory, captioning,
+corrosion, geometry, library operations, personal finance, vector search and ceramics. It also has
+two same-stem documents in different folders to test identity safety.
+`sample-data/queries.jsonl` provides 26 cases (25 answerable, one no-answer). The current local run
+(2026-10-14, the app's `auto` keyword matching, passages on) achieves **1.000 Hit@3, 1.000 MRR@5
+and 1.000 no-answer accuracy**; the 202-case showcase set (`showcase-data/queries.jsonl`) scores
+0.984 Hit@3, 0.967 MRR@5 and 1.000 no-answer accuracy, the same as with `--match all`:
 
-- plant biology and nutrition;
-- exercise and footwear;
-- food fermentation;
-- intertidal ecology;
-- bicycle mechanics;
-- sleep neuroscience;
-- composting and agriculture;
-- cloud formation;
-- music theory;
-- caption accessibility;
-- corrosion and materials;
-- geometry and architecture;
-- library operations;
-- personal finance;
-- vector search;
-- ceramics;
-- two same-stem documents in different folders to exercise identity safety.
+```bash
+onefind index ./sample-data --db demo.db --embed
+onefind smoke --db demo.db --queries sample-data/queries.jsonl
+```
 
-`sample-data/queries.jsonl` provides 26 cases (25 answerable plus one no-answer) for lexical, semantic, hybrid, disambiguation, and abstention behavior. The current local run achieves **1.000 Hit@3, 1.000 MRR@5, and 1.000 no-answer accuracy**.
-
-## Corrected benchmark evidence
-
-### Corrected full runs — 2026-09-24
+### Corrected benchmark evidence (full runs, 2026-09-24)
 
 | Configuration | SciFact nDCG@10 | NFCorpus nDCG@10 |
 |---|---:|---:|
@@ -147,27 +429,32 @@ The bundled `sample-data/` directory contains 20 short documents across:
 | hybrid binary (RRF) | 0.5959 | 0.3169 |
 | hybrid float + cosine rerank | 0.6451 | 0.3167 |
 
-**What changed and what the corrected evidence says:**
+What the corrected evidence says:
 
-- Hybrid float beats the best single mode on both datasets: +0.0117 on SciFact and +0.0299 on NFCorpus.
-- Int8 remains extremely close to float quality, but the current exact bounded scan is much slower; this implementation does **not** reproduce the paper's quantized speed advantage.
-- Binary loses quality and is still slower than native float KNN on these runs. Its value is a mathematical configuration study, not a performance win.
-- Pure-cosine reranking hurts both datasets once the deeper 100-document fused pool is rescored. RRF remains the safer default.
-- The original ≤150 ms p95 goal is not met by vector modes on this CPU. Float-hybrid p95 is 174.8 ms on SciFact and 218.3 ms on NFCorpus; reports preserve the real values.
-- The linear alpha sweep is effectively tied with RRF: SciFact linear α=0.1 scores 0.6572 versus RRF 0.6568, and NFCorpus linear α=0.2 scores 0.3470 versus RRF 0.3466. A 0.0004 single-run difference is not strong evidence of superiority.
+- Hybrid float beats the best single mode on both datasets: +0.0117 on SciFact and +0.0299 on
+  NFCorpus.
+- Int8 stays extremely close to float quality, but the exact bounded scan is much slower. This
+  implementation does **not** reproduce the paper's quantized speed advantage.
+- Binary loses quality and is still slower than native float KNN. Its value is as a configuration
+  study, not a performance win.
+- Pure-cosine reranking hurts both datasets once the deeper 100-document fused pool is rescored.
+  RRF remains the safer default.
+- The original ≤150 ms p95 goal is not met by vector modes on this CPU. Float-hybrid p95 is
+  174.8 ms on SciFact and 218.3 ms on NFCorpus.
+- The linear alpha sweep is effectively tied with RRF (SciFact α=0.1: 0.6572 vs 0.6568; NFCorpus
+  α=0.2: 0.3470 vs 0.3466). A 0.0004 single-run difference is not evidence of superiority.
 
 Full provenance-rich reports:
+[`eval-scifact-2026-09-24.md`](benchmarks/reports/eval-scifact-2026-09-24.md) ·
+[`eval-nfcorpus-2026-09-24.md`](benchmarks/reports/eval-nfcorpus-2026-09-24.md) ·
+[`alpha-sweep-scifact-2026-09-24.md`](benchmarks/reports/alpha-sweep-scifact-2026-09-24.md) ·
+[`alpha-sweep-nfcorpus-2026-09-24.md`](benchmarks/reports/alpha-sweep-nfcorpus-2026-09-24.md).
+They record dataset hashes, selected IDs, package versions, code state and database health. The
+model revision is recorded honestly as `unpinned`. These are single-run measurements, not
+confidence intervals. The historical `2026-08-26` reports are kept for transparency but are not
+valid evidence: that prototype reversed BM25 ordering, and its reranking kept stale fusion scores.
 
-- [`eval-scifact-2026-09-24.md`](benchmarks/reports/eval-scifact-2026-09-24.md)
-- [`eval-nfcorpus-2026-09-24.md`](benchmarks/reports/eval-nfcorpus-2026-09-24.md)
-- [`alpha-sweep-scifact-2026-09-24.md`](benchmarks/reports/alpha-sweep-scifact-2026-09-24.md)
-- [`alpha-sweep-nfcorpus-2026-09-24.md`](benchmarks/reports/alpha-sweep-nfcorpus-2026-09-24.md)
-
-The reports capture the resolved runtime revision when available; this run honestly records `unpinned` for the sentence-transformers model. Dataset files, code state, package versions, and selected IDs are recorded. These are single-run measurements, not confidence intervals.
-
-Historical `2026-08-26` reports are retained for transparency but are not valid evidence for the corrected implementation because the original prototype reversed BM25 ordering and reranking retained stale fusion scores.
-
-Regenerate current evidence with:
+Regenerate:
 
 ```bash
 onefind eval scifact --db data/scifact.db
@@ -176,66 +463,38 @@ onefind sweep-alpha scifact --db data/scifact.db
 onefind sweep-alpha nfcorpus --db data/nfcorpus.db
 ```
 
-## Web UI
+### Data integrity and safety
 
-The UI lives in `src/onefind/static/` and is included in the wheel.
+- Writes to documents, FTS, chunks and vectors are transactional, in committed batches. A failed
+  or cancelled indexing run keeps what was already committed and leaves the previous state
+  searchable.
+- Document IDs are collision-safe relative paths. When two indexed folders share a file name, the
+  second one gets a root-qualified ID instead of overwriting the first.
+- Schema v2 databases open and migrate to v3 in place, in one transaction. Unknown versions are
+  refused.
+- Embedded indexes reject keyword-only updates that would leave vectors stale. Attaching a model
+  later backfills missing vectors. Encoder output shape, finite values and zero vectors are
+  validated.
+- Evaluation databases are built in temporary files, bound to a manifest (dataset hashes, IDs,
+  model, configuration), and published atomically.
+- Destructive actions (delete a collection file, replace from backup, clear) require typing the
+  collection name. Replace makes a safety backup first. `/api/reset` stays disabled unless
+  `--reset-token` is given.
 
-![Current OneFind hybrid search UI](screenshots/ui-03-hybrid-results.png)
+### v1.1 browser evidence
 
-| Idle workspace | Mobile results |
-|---|---|
-| ![Idle OneFind workspace](screenshots/ui-01-index-ready.png) | ![Responsive OneFind results](screenshots/ui-06-mobile-results.png) |
+[`sshot/`](sshot/) holds the 21 Playwright screenshots and machine-readable assertions from the
+v1.1 UI (`python tools/browser_check.py --output sshot`). The v1.2 app is covered by
+`tools/ui_check.py` and [`screenshots/v1.2/`](screenshots/v1.2/README.md).
 
-### Comprehensive browser evidence
-
-The root [`sshot/`](sshot/) directory contains 21 Playwright screenshots covering every documented UI state, retrieval mode/precision, result-count option, URL restoration, dark mode, mobile layout, lexical-only capabilities, no-index behavior, network/validation errors, and inert rendering of hostile HTML. Machine-readable assertions and console results are in [`sshot/manifest.json`](sshot/manifest.json).
-
-Reproduce the browser evidence with an existing local Chrome installation:
-
-```bash
-pip install -e ".[browser]"
-python tools/browser_check.py --output sshot
-```
-
-- semantic and hybrid controls follow index capabilities;
-- all indexed text is rendered with DOM text nodes or validated highlight segments;
-- no response content is inserted as HTML;
-- CSP, `nosniff`, frame denial, no-referrer, and permissions restrictions are enabled;
-- loading, idle, no-index, empty, error, and result states are explicit;
-- native radio groups expose mode and precision choices accessibly;
-- request cancellation and sequence checks prevent stale responses from replacing newer results;
-- the server binds to loopback unless remote exposure is explicitly acknowledged.
-
-## Data integrity and safety
-
-- Text/JSONL documents use collision-free IDs.
-- Embedded indexes reject lexical-only updates that would leave vectors stale.
-- Late model attachment backfills missing vectors.
-- Encoder output shape, finite values, and zero vectors are validated.
-- Failed batches roll back; failed evaluation builds never replace the target database.
-- Evaluation manifests bind dataset hashes, selected IDs, model revision, metrics, and configuration.
-- Dataset downloads use temporary files and atomic publication.
-- Quantized scans are block-bounded and detect concurrent index changes.
-- Reset is disabled unless an explicit token is supplied at startup.
-
-## Repository map
-
-| Path | Purpose |
-|---|---|
-| `src/onefind/` | Library, CLI, evaluator, and server |
-| `src/onefind/static/` | Packaged no-build web interface |
-| `tests/` | 112 unit, integration, API, and packaging tests |
-| `sample-data/` | 20 documents plus 26 gold queries |
-| `benchmarks/reports/` | Generated evaluation and extension reports |
-| `docs/` | Product, architecture, flow, UI, backend, plan, and references |
-| `HOW_TO_RUN.md` | Complete local reproduction guide |
-| `FORMAL_PROJECT_REPORT.md` | Academic report with historical context and corrected-evidence notice |
-| `LICENSE` | MIT license |
+---
 
 ## Free and local by design
 
-OneFind intentionally avoids recurring-cost components. The default stack uses Python, SQLite, FTS5, sqlite-vec, NumPy, open-source sentence-transformers, FastAPI, and vanilla browser APIs. Models and datasets are downloaded once and cached locally.
+Python, SQLite, FTS5, sqlite-vec, NumPy, open-source sentence-transformers, FastAPI and vanilla
+browser APIs. There are no paid APIs, hosted vector databases or recurring costs. The model and
+datasets download once and are cached locally.
 
 ## License
 
-MIT. See `LICENSE`.
+MIT. See [`LICENSE`](LICENSE). Release notes are in [`CHANGELOG.md`](CHANGELOG.md).
