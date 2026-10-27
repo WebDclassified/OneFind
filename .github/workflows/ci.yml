@@ -43,6 +43,16 @@ jobs:
           tests/test_cli.py
           tests/test_store.py
           tests/test_sample_corpus.py
+          tests/test_store_v3.py
+          tests/test_ingest_v3.py
+          tests/test_library.py
+          tests/test_jobs.py
+          tests/test_snippets.py
+          tests/test_search_v3.py
+          tests/test_integration_v3.py
+          tests/test_static_ui.py
+          tests/test_cli_v3.py
+          tests/test_cli_fixes.py
           tests/test_eval.py::test_load_corpus_and_queries
           tests/test_eval.py::test_load_qrels_parses_header_and_scores
           tests/test_eval.py::test_missing_files_raise_data_error
@@ -81,7 +91,7 @@ jobs:
         run: |
           python -m pip install --upgrade pip build
           python -m build
-          python -m pip install --force-reinstall --no-deps dist/*.whl
+          python -m pip install --force-reinstall dist/*.whl
           python -m pip check
           onefind --version
       - name: Verify static UI is inside the wheel

@@ -12,7 +12,7 @@ dist/
 *.db
 *.db-wal
 *.db-shm
-data/
+/data/
 
 # OS noise
 Thumbs.db

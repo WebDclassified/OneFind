@@ -1,274 +1,696 @@
 <!doctype html>
-<html lang="en">
+<html lang="en" data-motion="full">
 
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <meta name="color-scheme" content="light">
-  <meta name="theme-color" content="#F8F7F5">
-  <title>OneFind · A Single-File Hybrid Information Retrieval System</title>
+  <meta name="color-scheme" content="light dark">
+  <meta name="theme-color" content="#F7F6F3">
+  <title>OneFind · Private search for your notes</title>
   <link rel="icon" href="/assets/favicon.svg" type="image/svg+xml">
   <link rel="stylesheet" href="/assets/styles.css">
-  <script src="/assets/app.js" defer></script>
+  <script type="module" src="/assets/app.js"></script>
 </head>
 
-<body>
+<body data-view="starting">
   <a class="skip-link" href="#search-input">Skip to search</a>
+  <h1 class="sr-only">OneFind</h1>
 
-  <header class="site-header">
+  <header class="app-header settle" data-settle="1">
     <div class="header-inner">
       <a class="brand" href="/" aria-label="OneFind home">
         <span class="brand-mark" aria-hidden="true">
-          <svg viewBox="0 0 32 32" role="img">
-            <circle cx="16" cy="16" r="11" fill="none" stroke="currentColor" stroke-width="1.4" />
-            <path d="m16 5 2.2 8.8L27 16l-8.8 2.2L16 27l-2.2-8.8L5 16l8.8-2.2L16 5Z" fill="none" stroke="currentColor"
-              stroke-width="1.2" stroke-linejoin="round" />
-            <circle cx="16" cy="16" r="2.1" fill="currentColor" />
+          <svg viewBox="0 0 32 32" focusable="false">
+            <rect class="brand-tile" x="3" y="3" width="26" height="26" rx="8" />
+            <circle class="brand-glyph" cx="14.5" cy="14.5" r="5.5" />
+            <path class="brand-glyph" d="m18.6 18.6 4.4 4.4" />
           </svg>
         </span>
-        <span class="brand-copy">
-          <strong>OneFind</strong>
-        </span>
+        <span class="brand-name">OneFind</span>
       </a>
 
-
+      <div class="collection-switcher">
+        <button class="collection-button" id="collection-button" type="button" aria-haspopup="menu"
+          aria-expanded="false" aria-controls="collection-menu">
+          <span class="collection-label">Collection</span>
+          <span class="collection-name" id="collection-name">Loading…</span>
+          <svg class="chevron" viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+            <path d="m6 9 6 6 6-6" />
+          </svg>
+        </button>
+        <div class="menu" id="collection-menu" role="menu" aria-labelledby="collection-button" hidden></div>
+      </div>
 
       <div class="header-actions">
-        <span class="service-pill" id="service-status" role="status">
+        <button class="status-pill" id="status-pill" type="button" data-tone="muted" aria-describedby="status-detail">
           <span class="status-dot" aria-hidden="true"></span>
-          Connecting
-        </span>
+          <span id="status-label">Connecting</span>
+          <span class="status-sync" id="status-sync" hidden></span>
+        </button>
+        <span class="sr-only" id="status-detail">Connecting to the local search service.</span>
+
+        <button class="icon-button" id="theme-toggle" type="button" aria-label="Theme: follow system">
+          <span class="theme-icon" id="theme-icon" aria-hidden="true"></span>
+          <span class="button-text" id="theme-label">System</span>
+        </button>
+        <button class="icon-button" id="shortcuts-button" type="button" aria-label="Keyboard shortcuts"
+          aria-keyshortcuts="?">
+          <svg viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+            <path d="M3 6h18v12H3z" />
+            <path d="M7 10h.01M11 10h.01M15 10h.01M7 14h10" />
+          </svg>
+          <span class="button-text">Shortcuts</span>
+        </button>
+        <button class="button button-secondary" id="manage-button" type="button" data-focus-key="manage-button">
+          <svg viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+            <path d="M12 9a3 3 0 1 0 0 6 3 3 0 0 0 0-6z" />
+            <path
+              d="M19.4 15a1.7 1.7 0 0 0 .3 1.8l.1.1a2 2 0 1 1-2.8 2.8l-.1-.1a1.7 1.7 0 0 0-1.8-.3 1.7 1.7 0 0 0-1 1.5V21a2 2 0 1 1-4 0v-.1a1.7 1.7 0 0 0-1.1-1.5 1.7 1.7 0 0 0-1.8.3l-.1.1a2 2 0 1 1-2.8-2.8l.1-.1a1.7 1.7 0 0 0 .3-1.8 1.7 1.7 0 0 0-1.5-1H3a2 2 0 1 1 0-4h.1a1.7 1.7 0 0 0 1.5-1.1 1.7 1.7 0 0 0-.3-1.8l-.1-.1a2 2 0 1 1 2.8-2.8l.1.1a1.7 1.7 0 0 0 1.8.3H9a1.7 1.7 0 0 0 1-1.5V3a2 2 0 1 1 4 0v.1a1.7 1.7 0 0 0 1 1.5 1.7 1.7 0 0 0 1.8-.3l.1-.1a2 2 0 1 1 2.8 2.8l-.1.1a1.7 1.7 0 0 0-.3 1.8V9a1.7 1.7 0 0 0 1.5 1H21a2 2 0 1 1 0 4h-.1a1.7 1.7 0 0 0-1.5 1z" />
+          </svg>
+          <span>Manage</span>
+        </button>
       </div>
     </div>
   </header>
 
-  <main class="page-shell">
-    <section class="hero" aria-labelledby="page-title">
-      <div class="hero-copy">
-        <h1 id="page-title">Find the right document<br><em>not just the right words.</em></h1>
-        <p class="hero-copy-text">Search the local archive. Exact words, related ideas, semantic similarities or a
-          considered blend of both. </p>
-        <div class="hero-route" aria-label="Search route">
-          <span>Search</span>
-          <span class="route-line" aria-hidden="true"><i></i><i></i><i></i></span>
-          <span>Result</span>
-        </div>
-        <div class="index-facts" aria-label="Index status">
-          <span><strong id="document-count">—</strong> documents</span>
-          <span><strong id="vector-count">—</strong> vectors</span>
-          <span><strong id="index-size">—</strong> on disk</span>
-        </div>
-      </div>
-
-
-    </section>
-
-    <section class="search-panel" aria-labelledby="search-heading">
-      <div class="section-heading-row">
-        <div>
-          <h2 id="search-heading">Search</h2>
-        </div>
-        <span class="route-code">ROUTE 01 <span aria-hidden="true">/</span> LOCAL</span>
-      </div>
-
-      <form id="search-form" novalidate>
-        <label class="sr-only" for="search-input">Search query</label>
-        <div class="search-row">
-          <div class="input-wrap">
-            <svg class="input-icon" viewBox="0 0 24 24" aria-hidden="true">
-              <path
-                d="m20.6 19.1-4.2-4.2a7.5 7.5 0 1 0-1.5 1.5l4.2 4.2 1.5-1.5ZM5 10.5a5.5 5.5 0 1 1 11 0 5.5 5.5 0 0 1-11 0Z" />
+  <main class="app-main" id="main">
+    <section class="search-area settle" data-settle="2" aria-label="Search">
+      <form id="search-form" class="search-form" role="search" novalidate>
+        <label class="sr-only" for="search-input">Search your notes</label>
+        <div class="search-field" id="search-field">
+          <svg class="search-icon" viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+            <path d="M11 4a7 7 0 1 0 0 14 7 7 0 0 0 0-14z" />
+            <path d="m20 20-4.2-4.2" />
+          </svg>
+          <input id="search-input" name="q" type="search" maxlength="512" autocomplete="off" spellcheck="true"
+            enterkeyhint="search" placeholder="Search your notes by keyword or meaning."
+            aria-describedby="search-hint" aria-keyshortcuts="/ Control+K">
+          <span class="typing-cue" id="typing-cue" aria-hidden="true"><i></i><i></i><i></i></span>
+          <button class="clear-button" id="clear-button" type="button" aria-label="Clear search" hidden>
+            <svg viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+              <path d="M6 6l12 12M18 6 6 18" />
             </svg>
-            <input id="search-input" name="query" type="search" maxlength="512" autocomplete="off" spellcheck="true"
-              placeholder="Enter a destination, phrase, or question..." aria-describedby="query-help">
-            <button class="clear-button" id="clear-button" type="button" aria-label="Clear search" hidden>
-              <svg viewBox="0 0 20 20" aria-hidden="true">
-                <path
-                  d="m5.7 4.3 4.3 4.3 4.3-4.3 1.4 1.4-4.3 4.3 4.3 4.3-1.4 1.4-4.3-4.3-4.3 4.3-1.4-1.4 4.3-4.3-4.3-4.3 1.4-1.4Z" />
+          </button>
+          <kbd class="key-hint" aria-hidden="true">/</kbd>
+        </div>
+        <p class="sr-only" id="search-hint">Results update as you type. Press Enter to search now.</p>
+
+        <div class="search-controls">
+          <fieldset class="segmented" id="mode-group">
+            <legend class="sr-only">Search mode</legend>
+            <label class="segment" data-mode="lexical">
+              <input type="radio" name="mode" value="lexical">
+              <span>Keyword</span>
+            </label>
+            <label class="segment" data-mode="semantic">
+              <input type="radio" name="mode" value="semantic">
+              <span>Meaning</span>
+            </label>
+            <label class="segment" data-mode="hybrid">
+              <input type="radio" name="mode" value="hybrid" checked>
+              <span>Hybrid</span>
+            </label>
+          </fieldset>
+
+          <div class="control-buttons">
+            <button class="button button-ghost" id="filters-toggle" type="button" aria-expanded="false"
+              aria-controls="filter-bar">
+              <svg viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+                <path d="M3 5h18l-7 8v6l-4 2v-8z" />
               </svg>
+              <span>Filters</span>
+              <span class="count-badge" id="filters-count" hidden>0</span>
+            </button>
+            <button class="button button-ghost" id="options-toggle" type="button" aria-expanded="false"
+              aria-controls="options-panel">
+              <svg viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+                <path d="M4 7h16M4 17h16M9 4v6M15 14v6" />
+              </svg>
+              <span>Options</span>
             </button>
           </div>
-          <button class="search-button" id="search-button" type="submit">
-            <span>Search</span>
-            <svg viewBox="0 0 20 20" aria-hidden="true">
-              <path d="m11.3 3.3 6 6-6 6-1.4-1.4 3.6-3.6H2.5V8.7h10.9l-3.5-3.9 1.4-1.5Z" />
+        </div>
+
+        <p class="mode-note" id="mode-note">Hybrid combines exact keywords with related meaning. Best for most searches.</p>
+
+        <div class="options-panel" id="options-panel" hidden>
+          <fieldset class="segmented segmented-small" id="precision-group">
+            <legend class="option-legend">Vector precision</legend>
+            <label class="segment">
+              <input type="radio" name="precision" value="float" checked>
+              <span>Full</span>
+            </label>
+            <label class="segment">
+              <input type="radio" name="precision" value="int8">
+              <span>Int8</span>
+            </label>
+            <label class="segment">
+              <input type="radio" name="precision" value="binary">
+              <span>Binary</span>
+            </label>
+          </fieldset>
+          <label class="select-field" for="result-count">
+            <span class="option-legend">Results</span>
+            <select id="result-count" name="k">
+              <option value="5">5</option>
+              <option value="10" selected>10</option>
+              <option value="20">20</option>
+              <option value="30">30</option>
+            </select>
+          </label>
+          <p class="option-help" id="precision-help">Full precision gives the most accurate meaning search.</p>
+        </div>
+
+        <div class="suggestions" id="suggestions" hidden></div>
+      </form>
+
+      <div class="filter-bar" id="filter-bar" data-open="false" hidden>
+        <div class="filter-controls">
+          <label class="filter-select">
+            <span class="sr-only">Add folder filter</span>
+            <select id="filter-folder" aria-label="Folder">
+              <option value="">Folder</option>
+            </select>
+          </label>
+          <label class="filter-select">
+            <span class="sr-only">Add file type filter</span>
+            <select id="filter-type" aria-label="File type">
+              <option value="">File type</option>
+            </select>
+          </label>
+          <label class="filter-select">
+            <span class="sr-only">Modified date</span>
+            <select id="filter-date" aria-label="Modified">
+              <option value="any">Modified: any time</option>
+              <option value="7d">Past 7 days</option>
+              <option value="30d">Past 30 days</option>
+              <option value="year">Past year</option>
+            </select>
+          </label>
+          <label class="filter-select" id="filter-tag-wrap">
+            <span class="sr-only">Add tag filter</span>
+            <select id="filter-tag" aria-label="Tag">
+              <option value="">Tag</option>
+            </select>
+          </label>
+        </div>
+        <ul class="chip-list" id="filter-chips" aria-label="Active filters"></ul>
+        <button class="button button-link" id="filters-clear" type="button" hidden>Clear filters</button>
+      </div>
+    </section>
+
+    <div class="workspace" id="workspace">
+      <section class="results-pane" id="results-pane" aria-labelledby="results-heading" aria-busy="false">
+        <div class="results-head" id="results-head" hidden>
+          <div class="results-head-text">
+            <h2 class="results-heading" id="results-heading">Results</h2>
+            <div class="results-line">
+              <p class="results-summary" id="results-summary"></p>
+              <details class="stage-details" id="stage-details" hidden>
+                <summary class="stage-total" id="stage-total">Timing</summary>
+                <div class="stage-popover">
+                  <p class="stage-popover-title">Search steps</p>
+                  <ol class="stage-trail" id="stage-trail" aria-label="Search steps"></ol>
+                </div>
+              </details>
+            </div>
+            <p class="results-note" id="results-note" hidden></p>
+          </div>
+          <div class="results-tools" id="results-tools">
+            <button class="button button-ghost" id="save-search" type="button">
+              <svg viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+                <path d="m12 3.5 2.6 5.3 5.9.9-4.3 4.1 1 5.8-5.2-2.7-5.2 2.7 1-5.8-4.3-4.1 5.9-.9z" />
+              </svg>
+              <span>Save search</span>
+            </button>
+            <div class="export-wrap">
+              <button class="button button-ghost" id="export-button" type="button" aria-haspopup="menu"
+                aria-expanded="false" aria-controls="export-menu">
+                <svg viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+                  <path d="M12 4v11M7 10l5 5 5-5M5 20h14" />
+                </svg>
+                <span>Export</span>
+              </button>
+              <div class="menu menu-right" id="export-menu" role="menu" aria-labelledby="export-button" hidden>
+                <button class="menu-item" type="button" role="menuitem" data-export="markdown">Markdown (.md)</button>
+                <button class="menu-item" type="button" role="menuitem" data-export="json">JSON (.json)</button>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <div class="view" id="view-idle" data-view="idle" hidden>
+          <div class="idle-grid">
+            <section class="card status-card" id="idle-status" aria-labelledby="idle-status-title"></section>
+            <section class="card list-card" aria-labelledby="recent-title">
+              <div class="card-head">
+                <h2 class="card-title" id="recent-title">Recent searches</h2>
+                <button class="button button-link" id="history-clear" type="button" hidden>Clear history</button>
+              </div>
+              <ul class="item-list" id="recent-list"></ul>
+            </section>
+            <section class="card list-card" aria-labelledby="saved-title">
+              <div class="card-head">
+                <h2 class="card-title" id="saved-title">Saved searches</h2>
+              </div>
+              <ul class="item-list" id="saved-list"></ul>
+            </section>
+            <section class="card list-card" aria-labelledby="docs-title">
+              <div class="card-head">
+                <h2 class="card-title" id="docs-title">Recent documents</h2>
+              </div>
+              <ul class="item-list" id="docs-list"></ul>
+            </section>
+            <section class="card list-card" aria-labelledby="bookmarks-title">
+              <div class="card-head">
+                <h2 class="card-title" id="bookmarks-title">Bookmarks</h2>
+              </div>
+              <ul class="item-list" id="bookmarks-list"></ul>
+            </section>
+          </div>
+        </div>
+
+        <div class="view" id="view-onboarding" data-view="onboarding" hidden>
+          <section class="welcome-card" aria-labelledby="welcome-title">
+            <span class="welcome-mark" aria-hidden="true">
+              <svg viewBox="0 0 48 48" focusable="false">
+                <path d="M10 8h18l10 10v22H10z" />
+                <path d="M28 8v10h10" />
+                <path d="M17 26h14M17 32h9" />
+              </svg>
+            </span>
+            <p class="eyebrow" id="welcome-eyebrow">No index ready</p>
+            <h2 class="welcome-title" id="welcome-title">Search your notes privately, on this computer</h2>
+            <p class="welcome-copy" id="welcome-copy">Point OneFind at a folder of notes or documents. It builds a
+              single index file you can search by keyword or by meaning. Nothing leaves this machine.</p>
+            <div class="welcome-actions">
+              <button class="button button-primary button-large" id="onboard-index" type="button">
+                <svg viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+                  <path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z" />
+                  <path d="M12 10v6M9 13h6" />
+                </svg>
+                <span>Index a folder</span>
+              </button>
+              <button class="button button-secondary button-large" id="onboard-open" type="button">
+                <svg viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+                  <path d="M4 6c0-1.7 3.6-3 8-3s8 1.3 8 3-3.6 3-8 3-8-1.3-8-3z" />
+                  <path d="M4 6v12c0 1.7 3.6 3 8 3s8-1.3 8-3V6" />
+                </svg>
+                <span>Open an existing collection</span>
+              </button>
+            </div>
+            <ul class="welcome-points">
+              <li>Works with Markdown and plain-text files.</li>
+              <li>The index is one portable file you can back up or move.</li>
+              <li>Meaning search runs on a small local model, no cloud.</li>
+            </ul>
+          </section>
+        </div>
+
+        <div class="view" id="view-typing" data-view="typing" hidden>
+          <div class="hint-card">
+            <p id="typing-hint">Keep typing — results appear after two characters. Press Enter to search now.</p>
+          </div>
+        </div>
+
+        <div class="view" id="view-loading" data-view="loading" hidden>
+          <div class="loading-layout">
+            <div class="pipeline-card">
+              <p class="pipeline-title" id="pipeline-title">Searching your notes</p>
+              <ol class="pipeline" id="pipeline" aria-label="Search progress"></ol>
+              <div class="slow-notice" id="slow-notice" hidden>
+                <p>Still working… Large collections and the first meaning search can take a moment.</p>
+                <button class="button button-secondary" id="cancel-search" type="button">Cancel search</button>
+              </div>
+            </div>
+            <ul class="skeleton-list" id="skeleton-list" aria-hidden="true"></ul>
+          </div>
+        </div>
+
+        <div class="view" id="view-results" data-view="results" hidden>
+          <div class="notice notice-neutral" id="abstain-notice" hidden></div>
+          <ol class="results-list" id="results-list" aria-label="Search results"></ol>
+          <section class="weak-group" id="weak-group" hidden>
+            <button class="weak-toggle" id="weak-toggle" type="button" aria-expanded="false" aria-controls="weak-list">
+              <svg class="chevron" viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+                <path d="m9 6 6 6-6 6" />
+              </svg>
+              <span id="weak-label">Weaker matches</span>
+            </button>
+            <p class="weak-copy">These share only some words or ideas with your search. They may not be what you are
+              looking for.</p>
+            <ol class="results-list weak-list" id="weak-list" aria-label="Weaker matches" hidden></ol>
+          </section>
+        </div>
+
+        <div class="view" id="view-empty" data-view="empty" hidden>
+          <div class="state-card">
+            <span class="state-icon" aria-hidden="true">
+              <svg viewBox="0 0 24 24" focusable="false">
+                <path d="M11 4a7 7 0 1 0 0 14 7 7 0 0 0 0-14z" />
+                <path d="m20 20-4.2-4.2M8.5 11h5" />
+              </svg>
+            </span>
+            <h2 class="state-title" id="empty-title">No matches found</h2>
+            <p class="state-copy" id="empty-copy"></p>
+            <div class="state-actions" id="empty-actions"></div>
+          </div>
+        </div>
+
+        <div class="view" id="view-error" data-view="error" hidden>
+          <div class="state-card state-error" id="error-card">
+            <span class="state-icon" id="error-icon" aria-hidden="true">
+              <svg viewBox="0 0 24 24" focusable="false">
+                <path d="M12 3 21.5 20h-19z" />
+                <path d="M12 10v4M12 17h.01" />
+              </svg>
+            </span>
+            <h2 class="state-title" id="error-title">Search could not finish</h2>
+            <p class="state-copy" id="error-message"></p>
+            <div class="state-actions" id="error-actions"></div>
+          </div>
+        </div>
+      </section>
+
+      <div class="preview-scrim" id="preview-scrim" hidden></div>
+      <aside class="preview-pane" id="preview" aria-labelledby="preview-title" hidden tabindex="-1">
+        <div class="preview-head">
+          <div class="preview-head-text">
+            <p class="preview-path" id="preview-path"></p>
+            <h2 class="preview-title" id="preview-title">Preview</h2>
+          </div>
+          <button class="icon-button" id="preview-close" type="button" aria-label="Close preview">
+            <svg viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+              <path d="M6 6l12 12M18 6 6 18" />
             </svg>
           </button>
         </div>
-        <p class="field-help" id="query-help"><span class="tiny-dot orange" aria-hidden="true"></span> Up to 512
-          characters. Your query stays on this machine.</p>
-
-        <fieldset class="option-group mode-group">
-          <legend>Route channel</legend>
-          <div class="segmented-control simple-modes">
-            <label>
-              <input type="radio" name="mode" value="lexical">
-              <span><strong>Keyword</strong><small>Exact words</small></span>
-            </label>
-            <label>
-              <input type="radio" name="mode" value="semantic">
-              <span><strong>Meaning</strong><small>Related ideas</small></span>
-            </label>
-            <label>
-              <input type="radio" name="mode" value="hybrid" checked>
-              <span class="mode-choice-copy"><strong>Hybrid</strong><small>Best
-                  balance</small><em>Recommended</em></span>
-            </label>
-          </div>
-        </fieldset>
-
-        <details class="advanced-settings" id="advanced-settings">
-          <summary>
-            <span class="summary-title">Technical settings</span>
-            <span class="summary-detail">Precision &amp; result count</span>
-            <span class="summary-icon" aria-hidden="true">+</span>
-          </summary>
-          <div class="advanced-content">
-            <fieldset class="option-group precision-group" id="precision-group" hidden>
-              <legend>Vector precision</legend>
-              <div class="segmented-control compact">
-                <label title="Full 32-bit float vectors">
-                  <input type="radio" name="precision" value="float" checked>
-                  <span><strong>Full</strong><small>Float32</small></span>
-                </label>
-                <label title="8-bit quantized cosine search">
-                  <input type="radio" name="precision" value="int8">
-                  <span><strong>Int8</strong><small>8-bit cosine</small></span>
-                </label>
-                <label title="One-bit sign vectors and Hamming distance">
-                  <input type="radio" name="precision" value="binary">
-                  <span><strong>Binary</strong><small>1-bit Hamming</small></span>
-                </label>
-              </div>
-            </fieldset>
-
-            <label class="result-count-control" for="result-count">
-              <span>Results shown</span>
-              <select id="result-count" name="k">
-                <option value="5">Top 5</option>
-                <option value="10" selected>Top 10</option>
-                <option value="20">Top 20</option>
-                <option value="30">Top 30</option>
-              </select>
-            </label>
-          </div>
-        </details>
-
-        <p class="mode-explainer" id="mode-explainer" aria-live="polite">
-          Hybrid combines exact keyword evidence with meaning-based retrieval.
-        </p>
-
-        <div class="examples-panel">
-          <div class="examples-heading">
-            <div>
-              <p class="section-kicker">Examples</p>
-              <h3>Choose a starting point</h3>
-            </div>
-            <span class="micro-label">Optional</span>
-          </div>
-          <div class="showcase-grid" id="examples" aria-label="Example searches">
-            <button type="button" data-query="What does PROD-001 require for feature flags?" data-mode="hybrid">
-              <span class="example-number">01</span>
-              <span><strong>Find an exact policy</strong><small>PROD-001 · feature flags</small></span>
-            </button>
-            <button type="button" data-query="How should our team handle rollback with clear ownership and evidence?"
-              data-mode="semantic">
-              <span class="example-number">02</span>
-              <span><strong>Search by meaning</strong><small>Rollback · ownership · evidence</small></span>
-            </button>
-            <button type="button" data-query="CSP remote binding reset safety" data-mode="hybrid">
-              <span class="example-number">03</span>
-              <span><strong>Combine signals</strong><small>CSP · binding · reset</small></span>
-            </button>
-            <button type="button" data-query="edge 005 AND OR NOT" data-mode="lexical">
-              <span class="example-number">04</span>
-              <span><strong>Handle safely</strong><small>EDGE-005 · FTS operators</small></span>
-            </button>
-          </div>
+        <dl class="preview-meta" id="preview-meta"></dl>
+        <div class="preview-actions" id="preview-actions"></div>
+        <div class="find-bar">
+          <label class="sr-only" for="preview-find">Find in document</label>
+          <input id="preview-find" type="search" placeholder="Find in document" autocomplete="off">
+          <span class="find-count" id="preview-find-count" aria-live="polite"></span>
+          <button class="icon-button icon-button-small" id="preview-find-prev" type="button"
+            aria-label="Previous match">
+            <svg viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+              <path d="m6 15 6-6 6 6" />
+            </svg>
+          </button>
+          <button class="icon-button icon-button-small" id="preview-find-next" type="button" aria-label="Next match">
+            <svg viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+              <path d="m6 9 6 6 6-6" />
+            </svg>
+          </button>
         </div>
-      </form>
-    </section>
-
-    <section class="results-section" id="results-section" aria-labelledby="results-heading" aria-busy="false">
-      <div class="section-heading-row results-heading-row">
-        <div>
-          <h2 id="results-heading">Search results</h2>
-        </div>
-        <p class="results-summary" id="results-summary">Enter a query to begin.</p>
-      </div>
-      <p class="sr-only" id="live-status" aria-live="polite" aria-atomic="true"></p>
-
-      <div class="state-card idle-state" id="idle-state">
-        <span class="state-icon" aria-hidden="true">
-          <svg viewBox="0 0 32 32">
-            <path
-              d="M14.3 4a10.3 10.3 0 1 0 7.2 17.5l5.4 5.4 2.1-2.1-5.4-5.4A10.3 10.3 0 0 0 14.3 4Zm0 2.6a7.7 7.7 0 1 1 0 15.4 7.7 7.7 0 0 1 0-15.4Z" />
-          </svg>
-        </span>
-        <p>Enter a query and the local index will mark the first useful coordinates.</p>
-      </div>
-
-      <div class="state-card loading-state" id="loading-state" hidden>
-        <div class="loading-copy">
-          <span class="spinner" aria-hidden="true"></span>
-          <div>
-            <h3 id="loading-title">Searching...</h3>
-            <p id="loading-copy">Ranking local documents.</p>
-          </div>
-        </div>
-        <div class="skeleton-list" aria-hidden="true">
-          <div class="skeleton-card"><span></span>
-            <div><i></i><i></i><i></i></div>
-          </div>
-          <div class="skeleton-card"><span></span>
-            <div><i></i><i></i><i></i></div>
-          </div>
-          <div class="skeleton-card"><span></span>
-            <div><i></i><i></i><i></i></div>
-          </div>
-        </div>
-      </div>
-
-      <div class="state-card no-index-state" id="no-index-state" hidden>
-        <span class="state-icon warning" aria-hidden="true">!</span>
-        <h3>No index is loaded</h3>
-        <p>Build a local index, then restart the service:</p>
-        <code>onefind index ./sample-data --db demo.db --embed</code>
-        <code>onefind serve --db demo.db</code>
-      </div>
-
-      <div class="state-card empty-state" id="empty-state" hidden>
-        <span class="state-icon" aria-hidden="true">0</span>
-        <h3>No matching documents</h3>
-        <p id="empty-copy">Try fewer words, a related phrase, or another route.</p>
-        <div class="no-answer-guidance">
-          <strong>Nearest matches</strong>
-          <span>Keyword mode needs every query term. Meaning and Hybrid can still find related concepts.</span>
-        </div>
-      </div>
-
-      <div class="state-card error-state" id="error-state" hidden>
-        <span class="state-icon error" aria-hidden="true">!</span>
-        <h3>Search could not finish</h3>
-        <p id="error-message">The local search service returned an error.</p>
-        <button class="secondary-button" id="retry-button" type="button">Try again</button>
-      </div>
-
-      <ol class="results-list" id="results-list" hidden></ol>
-    </section>
-
-
+        <p class="notice notice-warn" id="preview-notice" hidden></p>
+        <div class="preview-body" id="preview-body" aria-live="off"></div>
+      </aside>
+    </div>
   </main>
 
-  <footer class="site-footer">
-    <p class="footer-mark"><span class="tiny-dot blue" aria-hidden="true"></span> OneFind <span
-        class="footer-separator">/</span> </p>
-    <nav aria-label="Footer navigation">
-      <a href="#search-input">Search</a>
-      <a href="#results-section">Result</a>
-    </nav>
+  <footer class="app-footer">
+    <p>
+      <svg viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+        <path d="M12 3l8 3v6c0 4.5-3.4 8.3-8 9-4.6-.7-8-4.5-8-9V6z" />
+      </svg>
+      Everything stays on this computer. No network calls.
+    </p>
   </footer>
 
+  <dialog class="dialog dialog-wide" id="index-dialog" aria-labelledby="index-title">
+    <div class="dialog-head">
+      <div>
+        <p class="eyebrow" id="index-eyebrow">Step 1 of 2</p>
+        <h2 class="dialog-title" id="index-title">Choose a folder to index</h2>
+      </div>
+      <button class="icon-button" type="button" data-close aria-label="Close">
+        <svg viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+          <path d="M6 6l12 12M18 6 6 18" />
+        </svg>
+      </button>
+    </div>
+
+    <div class="dialog-body" id="index-step-choose">
+      <div class="field" id="index-name-row" hidden>
+        <label for="index-name">Collection name</label>
+        <input id="index-name" type="text" maxlength="64" placeholder="Notes" autocomplete="off"
+          aria-describedby="index-name-error">
+        <p class="field-error" id="index-name-error" hidden></p>
+      </div>
+      <div class="browser">
+        <nav class="browser-places" aria-label="Places">
+          <p class="option-legend">Places</p>
+          <ul id="fs-places"></ul>
+        </nav>
+        <div class="browser-main">
+          <div class="browser-bar">
+            <button class="icon-button icon-button-small" id="fs-up" type="button" aria-label="Up one folder">
+              <svg viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+                <path d="M12 19V5M5 12l7-7 7 7" />
+              </svg>
+            </button>
+            <nav class="crumbs" aria-label="Current folder">
+              <ol id="fs-crumbs"></ol>
+            </nav>
+          </div>
+          <ul class="browser-list" id="fs-list" aria-label="Folders and files" tabindex="-1"></ul>
+          <p class="browser-count" id="fs-count" aria-live="polite"></p>
+        </div>
+      </div>
+      <form class="path-form" id="fs-path-form" novalidate>
+        <label for="fs-path">Or type a folder or file path</label>
+        <div class="inline-field">
+          <input id="fs-path" type="text" autocomplete="off" spellcheck="false" placeholder="C:\Users\you\Notes"
+            aria-describedby="fs-error">
+          <button class="button button-secondary" type="submit">Go</button>
+        </div>
+        <p class="field-error" id="fs-error" role="alert" hidden></p>
+      </form>
+      <details class="disclosure">
+        <summary id="index-options-summary">Options</summary>
+        <div class="field">
+          <label for="index-exclude">Skip these files or folders</label>
+          <textarea id="index-exclude" rows="2" spellcheck="false" placeholder="drafts, archive/*, *.log.md"
+            aria-describedby="exclude-help"></textarea>
+          <p class="field-help" id="exclude-help">Comma or line separated patterns. Hidden folders and
+            node_modules are always skipped. Patterns you enter replace the ones saved for a folder you indexed
+            before; leave the field alone to keep them.</p>
+        </div>
+      </details>
+      <label class="check-field">
+        <input type="checkbox" id="index-embed" checked>
+        <span>
+          <strong>Build vectors for meaning search</strong>
+          <small id="index-embed-help">Uses the local model when it is installed. Keyword search works either
+            way.</small>
+        </span>
+      </label>
+      <label class="check-field">
+        <input type="checkbox" id="index-autosync" checked>
+        <span>
+          <strong>Keep this collection up to date automatically</strong>
+          <small>OneFind checks the folder every few seconds and indexes new, changed and deleted notes. You can
+            turn this off in Manage.</small>
+        </span>
+      </label>
+    </div>
+
+    <div class="dialog-body" id="index-step-progress" hidden>
+      <ol class="stepper" id="job-steps" aria-label="Indexing steps"></ol>
+      <div class="progress" id="job-progress" role="progressbar" aria-labelledby="job-count" aria-valuemin="0"
+        aria-valuemax="100">
+        <span class="progress-fill"></span>
+      </div>
+      <p class="job-count" id="job-count" tabindex="-1">Starting…</p>
+      <p class="job-message" id="job-message" aria-live="polite"></p>
+      <p class="field-help">You can close this window. Indexing continues and the status at the top shows
+        progress.</p>
+    </div>
+
+    <div class="dialog-body" id="index-step-done" hidden>
+      <div class="done-hero">
+        <svg class="done-check" viewBox="0 0 52 52" aria-hidden="true" focusable="false">
+          <circle cx="26" cy="26" r="23" />
+          <path d="m15 27 7.5 7.5L37.5 19" />
+        </svg>
+        <div>
+          <h3 class="done-title" id="done-title">Your collection is ready</h3>
+          <p class="done-copy" id="done-copy"></p>
+        </div>
+      </div>
+      <dl class="summary-grid" id="done-summary"></dl>
+      <details class="disclosure" id="done-skipped" hidden>
+        <summary id="done-skipped-label">Skipped files</summary>
+        <ul class="skipped-list" id="done-skipped-list"></ul>
+      </details>
+    </div>
+
+    <div class="dialog-body" id="index-step-failed" hidden>
+      <div class="notice notice-warn">
+        <p><strong id="failed-title">Indexing stopped</strong></p>
+        <p id="failed-message"></p>
+        <p id="failed-safe">Your previous collection is unchanged and still searchable.</p>
+      </div>
+    </div>
+
+    <div class="dialog-foot" id="index-foot"></div>
+  </dialog>
+
+  <dialog class="dialog sheet" id="manage-dialog" aria-labelledby="manage-title">
+    <div class="dialog-head">
+      <div>
+        <p class="eyebrow" id="manage-collection">Collection</p>
+        <h2 class="dialog-title" id="manage-title">Manage</h2>
+      </div>
+      <button class="icon-button" type="button" data-close aria-label="Close manage panel">
+        <svg viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+          <path d="M6 6l12 12M18 6 6 18" />
+        </svg>
+      </button>
+    </div>
+    <nav class="sheet-nav" aria-label="Manage sections">
+      <button type="button" data-section="manage-health">Health</button>
+      <button type="button" data-section="manage-maintenance">Maintenance</button>
+      <button type="button" data-section="manage-backups">Backups</button>
+      <button type="button" data-section="manage-collections">Collections</button>
+      <button type="button" data-section="manage-prefs">Preferences</button>
+    </nav>
+    <div class="sheet-body" id="manage-body">
+      <section class="sheet-section" id="manage-health" aria-labelledby="manage-health-title" tabindex="-1">
+        <h3 class="section-title" id="manage-health-title">Health</h3>
+        <div id="manage-health-content"></div>
+        <div class="sheet-block autosync-block" id="manage-autosync">
+          <label class="check-field">
+            <input type="checkbox" id="autosync-toggle" aria-describedby="autosync-status">
+            <span>
+              <strong>Auto-sync</strong>
+              <small>OneFind checks your folders every few seconds and updates the index when notes change.
+                Everything stays on this computer.</small>
+            </span>
+          </label>
+          <p class="status-line autosync-line" id="autosync-status" aria-live="polite"></p>
+        </div>
+      </section>
+      <section class="sheet-section" id="manage-maintenance" aria-labelledby="manage-maintenance-title"
+        tabindex="-1">
+        <h3 class="section-title" id="manage-maintenance-title">Maintenance</h3>
+        <div id="manage-maintenance-content"></div>
+      </section>
+      <section class="sheet-section" id="manage-backups" aria-labelledby="manage-backups-title" tabindex="-1">
+        <h3 class="section-title" id="manage-backups-title">Backups</h3>
+        <div id="manage-backups-content"></div>
+      </section>
+      <section class="sheet-section" id="manage-collections" aria-labelledby="manage-collections-title"
+        tabindex="-1">
+        <h3 class="section-title" id="manage-collections-title">Collections</h3>
+        <div id="manage-collection-content"></div>
+        <div id="manage-collections-content"></div>
+      </section>
+      <section class="sheet-section" id="manage-privacy" aria-labelledby="manage-privacy-title" tabindex="-1">
+        <h3 class="section-title" id="manage-privacy-title">Privacy</h3>
+        <p class="section-copy">Everything stays on this computer. No network calls. OneFind reads your files,
+          keeps its index in one local file, and runs meaning search with a model stored on this machine.</p>
+      </section>
+      <section class="sheet-section" id="manage-prefs" aria-labelledby="manage-prefs-title" tabindex="-1">
+        <h3 class="section-title" id="manage-prefs-title">Preferences</h3>
+        <fieldset class="segmented segmented-small" id="theme-pref-group">
+          <legend class="option-legend">Theme</legend>
+          <label class="segment"><input type="radio" name="theme-pref" value="system"><span>System</span></label>
+          <label class="segment"><input type="radio" name="theme-pref" value="light"><span>Light</span></label>
+          <label class="segment"><input type="radio" name="theme-pref" value="dark"><span>Dark</span></label>
+        </fieldset>
+        <label class="check-field">
+          <input type="checkbox" id="pref-reduce-motion">
+          <span>
+            <strong>Reduce motion</strong>
+            <small>Turns off movement and fades. Your system setting is respected automatically.</small>
+          </span>
+        </label>
+        <label class="check-field">
+          <input type="checkbox" id="pref-single-keys" checked>
+          <span>
+            <strong>Single-key shortcuts</strong>
+            <small>/ to search, j and k to move, o c b e for result actions. Turn off if they get in the way of
+              speech input or other tools.</small>
+          </span>
+        </label>
+      </section>
+    </div>
+  </dialog>
+
+  <dialog class="dialog" id="shortcuts-dialog" aria-labelledby="shortcuts-title">
+    <div class="dialog-head">
+      <h2 class="dialog-title" id="shortcuts-title">Keyboard shortcuts</h2>
+      <button class="icon-button" type="button" data-close aria-label="Close shortcuts">
+        <svg viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+          <path d="M6 6l12 12M18 6 6 18" />
+        </svg>
+      </button>
+    </div>
+    <div class="dialog-body">
+      <dl class="shortcut-list">
+        <div><dt><kbd>/</kbd> or <kbd>Ctrl</kbd> <kbd>K</kbd></dt><dd>Focus the search box</dd></div>
+        <div><dt><kbd>Enter</kbd> in search</dt><dd>Search now</dd></div>
+        <div><dt><kbd>↓</kbd> <kbd>↑</kbd> or <kbd>j</kbd> <kbd>k</kbd></dt><dd>Move between results</dd></div>
+        <div><dt><kbd>Enter</kbd> on a result</dt><dd>Preview the document</dd></div>
+        <div><dt><kbd>o</kbd></dt><dd>Open the file</dd></div>
+        <div><dt><kbd>c</kbd></dt><dd>Copy the snippet</dd></div>
+        <div><dt><kbd>b</kbd></dt><dd>Bookmark or remove bookmark</dd></div>
+        <div><dt><kbd>e</kbd></dt><dd>Explain why it matched</dd></div>
+        <div><dt><kbd>Esc</kbd></dt><dd>Close the preview, then clear the search</dd></div>
+        <div><dt><kbd>?</kbd></dt><dd>Show this list</dd></div>
+      </dl>
+      <p class="field-help">Single-key shortcuts can be turned off in Manage → Preferences.</p>
+    </div>
+  </dialog>
+
+  <dialog class="dialog dialog-small" id="confirm-dialog" aria-labelledby="confirm-title"
+    aria-describedby="confirm-message">
+    <form class="dialog-form" id="confirm-form" novalidate>
+      <div class="dialog-head">
+        <h2 class="dialog-title" id="confirm-title">Are you sure?</h2>
+      </div>
+      <div class="dialog-body">
+        <p id="confirm-message"></p>
+        <div class="field" id="confirm-type-row" hidden>
+          <label for="confirm-type-input" id="confirm-type-label">Type the name to confirm</label>
+          <input id="confirm-type-input" type="text" autocomplete="off" spellcheck="false"
+            aria-describedby="confirm-message">
+        </div>
+      </div>
+      <div class="dialog-foot">
+        <button class="button button-secondary" type="button" data-close>Cancel</button>
+        <button class="button button-primary" id="confirm-ok" type="submit">Confirm</button>
+      </div>
+    </form>
+  </dialog>
+
+  <dialog class="dialog dialog-small" id="prompt-dialog" aria-labelledby="prompt-title">
+    <form class="dialog-form" id="prompt-form" novalidate>
+      <div class="dialog-head">
+        <h2 class="dialog-title" id="prompt-title">Name</h2>
+      </div>
+      <div class="dialog-body">
+        <p id="prompt-message" hidden></p>
+        <div class="field">
+          <label for="prompt-input" id="prompt-label">Name</label>
+          <input id="prompt-input" type="text" autocomplete="off" spellcheck="false"
+            aria-describedby="prompt-hint prompt-error">
+          <p class="field-help" id="prompt-hint"></p>
+          <p class="field-error" id="prompt-error" hidden></p>
+        </div>
+      </div>
+      <div class="dialog-foot">
+        <button class="button button-secondary" type="button" data-close>Cancel</button>
+        <button class="button button-primary" id="prompt-ok" type="submit">Save</button>
+      </div>
+    </form>
+  </dialog>
+
+  <div class="menu menu-floating" id="card-menu" role="menu" aria-label="More actions" hidden></div>
+  <div class="toast-region" id="toasts" role="status" aria-live="polite" aria-atomic="false"></div>
+  <p class="sr-only" id="announcer" aria-live="polite" aria-atomic="true"></p>
 </body>
 
 </html>

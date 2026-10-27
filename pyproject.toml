@@ -4,8 +4,8 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "onefind"
-version = "1.1.0"
-description = "Lexical, semantic, and hybrid search in a single SQLite file - reproduction of arXiv:2608.24060 (scrydb)"
+version = "1.2.1"
+description = "Private, local search for your notes: keyword, meaning, and hybrid search in a single SQLite file (built on a reproduction of arXiv:2608.24060)"
 readme = "README.md"
 requires-python = ">=3.11"
 license = { file = "LICENSE" }
